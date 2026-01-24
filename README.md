@@ -1,3 +1,8 @@
+# Compatibility notice!
+This extension has not been updated to work with Blender 5.0 yet. A whole bunch of changes are being made, and an updated version will be out soon.
+
+#
+
 ![images/cover.png](images/cover.png)
 
 # Usage Guide
