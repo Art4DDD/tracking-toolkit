@@ -6,7 +6,7 @@ from typing import Generator
 import bpy
 import bpy_extras
 import openvr
-from mathutils import Matrix
+from mathutils import Matrix, Quaternion
 
 from .properties import OVRContext, OVRTracker, OVRInput
 
@@ -176,35 +176,26 @@ def _insert_action(ovr_context: OVRContext):
     pose_data = _get_buffer()
     num_samples = len(pose_data)
     print(f"OpenVR Processing {num_samples} recorded samples")
-
     if num_samples == 0:
         print(f"OpenVR Found no samples to process")
         return
 
-    # Frame and conversion math
     take_start_time = pose_data[0][0][0]
     framerate = bpy.context.scene.render.fps / bpy.context.scene.render.fps_base
     start_frame = ovr_context.record_start_frame
 
-    # Create object to store processed animation data
     animation_data = {}
 
-    # Process samples into a large buffer, so we can efficiently apply it later
-    print("OpenVR Converting samples...")
     for sample in pose_data:
         for time, tracker, pose in sample:
-            # Get object for tracker
             tracker_obj = bpy.data.objects.get(tracker.name)
             if not tracker_obj:
                 continue
 
-            # Create animation data if it doesn't exist
             if tracker_obj.animation_data is None:
                 tracker_obj.animation_data_create()
 
-            # Initialize data structure for this object if it's the first time we see it.
             if tracker.name not in animation_data:
-                print(tracker.name)
                 animation_data[tracker.name] = {
                     "obj": tracker_obj,
                     "frames": [],
@@ -213,18 +204,33 @@ def _insert_action(ovr_context: OVRContext):
                     "scales": []
                 }
 
-            # Calculate frame number
             time_delta = time - take_start_time
             frame = start_frame + time_delta.total_seconds() * framerate
 
-            # Decompose the matrix and append data
+            # получаем лок, рот, скейл из матрицы
             loc, rot, scale = pose.decompose()
 
+            # -----------------------------
+            # СТАБИЛИЗАЦИЯ QUATERNION
+            # -----------------------------
             data = animation_data[tracker.name]
+
+            prev_quat = None
+            if data["rots"]:
+                # берем последний записанный quaternion (Blender хранит как [w, x, y, z])
+                last_index = len(data["rots"]) - 4
+                prev_quat_list = data["rots"][last_index:last_index+4]
+                prev_quat = Quaternion(prev_quat_list)
+                if prev_quat.dot(rot) < 0:
+                    rot = -rot
+            # -----------------------------
+
+            # сохраняем ключевые данные
             data["frames"].append(frame)
             data["locs"].extend(loc)
             data["rots"].extend(rot)
             data["scales"].extend(scale)
+
 
     # Now insert or replace the data
     print("OpenVR Inserting data...")
