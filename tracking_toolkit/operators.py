@@ -4,7 +4,7 @@ from pathlib import Path
 from mathutils import Vector
 
 from .properties import Preferences, OVRTransform, OVRContext, OVRTracker
-from .tracking import load_trackers, append_trackers, start_recording, stop_recording, start_preview, stop_preview, init_handles
+from .tracking import load_trackers, start_recording, stop_recording, start_preview, stop_preview, init_handles
 from .. import __package__ as base_package
 
 
@@ -608,7 +608,7 @@ class CreateRefsOperator(bpy.types.Operator):
             model_templates[key] = imported
             return imported
 
-        append_trackers(ovr_context)
+        load_trackers(ovr_context)
 
         # Create references
         def select_model(target_model: bpy.types.Object):
