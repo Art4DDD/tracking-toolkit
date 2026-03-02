@@ -15,7 +15,8 @@ from .tracking_toolkit.operators import (
     ToggleActiveOperator,
     ToggleCalibrationOperator,
     ToggleRecordOperator,
-    BuildArmatureOperator
+    BuildArmatureOperator,
+    DumpOpenVRDebugOperator
 )
 from .tracking_toolkit.properties import (
     OVRContext,
@@ -62,6 +63,7 @@ def register():
     bpy.utils.register_class(CreateRefsOperator)
     bpy.utils.register_class(ToggleRecordOperator)
     bpy.utils.register_class(BuildArmatureOperator)
+    bpy.utils.register_class(DumpOpenVRDebugOperator)
 
     # Contexts
 
@@ -92,6 +94,7 @@ def unregister():
     del bpy.types.Scene.OVRContext
 
     # Classes
+    bpy.utils.unregister_class(DumpOpenVRDebugOperator)
     bpy.utils.unregister_class(BuildArmatureOperator)
     bpy.utils.unregister_class(ToggleRecordOperator)
     bpy.utils.unregister_class(CreateRefsOperator)

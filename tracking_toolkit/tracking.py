@@ -1061,6 +1061,22 @@ def _append_new_trackers_only(ovr_context: OVRContext):
             print(f"[OpenVR Device] {_format_tracker_debug_info(debug_info)}")
 
 
+
+
+def dump_openvr_devices_to_console():
+    """Print current OpenVR device information to Blender console."""
+    print("OpenVR Device Dump")
+    system = openvr.VRSystem()
+
+    for i in range(openvr.k_unMaxTrackedDeviceCount):
+        device_class = system.getTrackedDeviceClass(i)
+        if device_class == openvr.TrackedDeviceClass_Invalid:
+            continue
+
+        debug_info = _collect_tracker_debug_info(system, i, device_class)
+        if debug_info:
+            print(f"[OpenVR Device] {_format_tracker_debug_info(debug_info)}")
+
 def load_trackers(ovr_context: OVRContext):
     print("OpenVR Loading Trackers")
     system = openvr.VRSystem()

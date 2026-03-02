@@ -77,6 +77,7 @@ class RecorderPanel(View3DPanel, bpy.types.Panel):
 
         # Create empties
         layout.operator(CreateRefsOperator.bl_idname, text="Create References")
+        layout.operator(DumpOpenVRDebugOperator.bl_idname, text="Dump OpenVR Debug to Console")
 
         # Show the rest if OpenVR is running
         if not ovr_context.enabled:
