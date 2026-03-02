@@ -489,59 +489,52 @@ class CreateRefsOperator(bpy.types.Operator):
 
             print(f"[OpenVR RenderModel] device={tracker.index} serial={tracker.serial} render_model={render_model_name}")
 
-            # Prefer full original model path provided by OpenVR RenderModels API.
-            render_models = None
             try:
                 render_models = openvr.VRRenderModels()
             except Exception:
-                render_models = None
-
-            if render_models:
-                get_original_path = (
-                    getattr(render_models, "getRenderModelOriginalPath", None)
-                    or getattr(render_models, "GetRenderModelOriginalPath", None)
-                )
-
-                if get_original_path:
-                    call_variants = [
-                        lambda: get_original_path(render_model_name),
-                        lambda: get_original_path(render_model_name, 1024),
-                    ]
-                    for call in call_variants:
-                        try:
-                            result = call()
-                        except Exception:
-                            continue
-
-                        original_path = ""
-                        if isinstance(result, tuple):
-                            if result and isinstance(result[0], str):
-                                original_path = result[0]
-                            elif len(result) > 1 and isinstance(result[1], str):
-                                original_path = result[1]
-                        elif isinstance(result, str):
-                            original_path = result
-
-                        original_path = (original_path or "").strip()
-                        if original_path:
-                            path_obj = Path(original_path)
-                            print(f"[OpenVR ModelPath] device={tracker.index} serial={tracker.serial} path={path_obj} exists={path_obj.exists()} source=render_models_api")
-                            if path_obj.exists():
-                                return path_obj
-
-            # Compatibility fallback for runtimes/bindings that do not expose original path API.
-            resource_root = _get_prop(tracker.index, openvr.Prop_ResourceRoot_String)
-            if not resource_root:
-                print(f"[OpenVR ModelPath] device={tracker.index} serial={tracker.serial} path=<unavailable> reason=no_resource_root")
+                print(f"[OpenVR ModelPath] device={tracker.index} serial={tracker.serial} path=<unavailable> reason=no_vrrendermodels")
                 return None
 
-            root_path = Path(resource_root)
-            model_path = root_path / "rendermodels" / render_model_name / f"{render_model_name}.obj"
-            print(f"[OpenVR ModelPath] device={tracker.index} serial={tracker.serial} path={model_path} exists={model_path.exists()} source=resource_root_fallback")
-            if model_path.exists():
-                return model_path
+            get_original_path = (
+                getattr(render_models, "getRenderModelOriginalPath", None)
+                or getattr(render_models, "GetRenderModelOriginalPath", None)
+            )
+            if not get_original_path:
+                print(f"[OpenVR ModelPath] device={tracker.index} serial={tracker.serial} path=<unavailable> reason=no_get_render_model_original_path")
+                return None
 
+            call_variants = [
+                lambda: get_original_path(render_model_name),
+                lambda: get_original_path(render_model_name, 1024),
+            ]
+
+            for call in call_variants:
+                try:
+                    result = call()
+                except Exception:
+                    continue
+
+                original_path = ""
+                if isinstance(result, tuple):
+                    if result and isinstance(result[0], str):
+                        original_path = result[0]
+                    elif len(result) > 1 and isinstance(result[1], str):
+                        original_path = result[1]
+                elif isinstance(result, str):
+                    original_path = result
+
+                original_path = (original_path or "").strip()
+                if not original_path:
+                    continue
+
+                path_obj = Path(original_path)
+                print(f"[OpenVR ModelPath] device={tracker.index} serial={tracker.serial} path={path_obj} exists={path_obj.exists()} source=render_models_api")
+                if path_obj.exists():
+                    return path_obj
+
+            print(f"[OpenVR ModelPath] device={tracker.index} serial={tracker.serial} path=<unavailable> reason=render_models_api_empty")
             return None
+
 
 
         def _resolve_model_obj_path(tracker: OVRTracker) -> Path | None:
