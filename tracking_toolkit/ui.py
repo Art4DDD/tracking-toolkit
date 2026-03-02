@@ -7,7 +7,8 @@ from .operators import (
     ToggleCalibrationOperator,
     CreateRefsOperator,
     ToggleRecordOperator,
-    BuildArmatureOperator
+    BuildArmatureOperator,
+    DumpOpenVRDebugOperator
 )
 from .properties import OVRContext
 
