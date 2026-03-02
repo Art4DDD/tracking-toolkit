@@ -417,19 +417,90 @@ class CreateRefsOperator(bpy.types.Operator):
             except Exception:
                 return ""
 
-        def _resolve_openvr_model_token(tracker: OVRTracker) -> str | None:
-            token_candidates = [
-                _get_prop(tracker.index, openvr.Prop_RenderModelName_String),
-                _get_prop(tracker.index, getattr(openvr, "Prop_ControllerType_String", -1)),
-                _get_prop(tracker.index, getattr(openvr, "Prop_RegisteredDeviceType_String", -1)),
-                _get_prop(tracker.index, getattr(openvr, "Prop_ModelNumber_String", -1)),
-            ]
+        def _get_prop_int(index: int, prop: int) -> int | None:
+            try:
+                return system.getInt32TrackedDeviceProperty(index, prop)
+            except Exception:
+                return None
 
-            for token in token_candidates:
+        def _resolve_openvr_model_tokens(tracker: OVRTracker) -> list[str]:
+            candidates: list[str] = []
+
+            def _add(token: str):
                 token = (token or "").strip()
-                if token:
-                    return token
-            return None
+                if token and token not in candidates:
+                    candidates.append(token)
+
+            render_model_name = _get_prop(tracker.index, openvr.Prop_RenderModelName_String)
+            _add(render_model_name)
+            _add(_get_prop(tracker.index, getattr(openvr, "Prop_ControllerType_String", -1)))
+            _add(_get_prop(tracker.index, getattr(openvr, "Prop_RegisteredDeviceType_String", -1)))
+            _add(_get_prop(tracker.index, getattr(openvr, "Prop_ModelNumber_String", -1)))
+
+            render_models = openvr.VRRenderModels()
+            get_component_count = (
+                getattr(render_models, "GetComponentCount", None)
+                or getattr(render_models, "getComponentCount", None)
+            )
+            get_component_name = (
+                getattr(render_models, "GetComponentName", None)
+                or getattr(render_models, "getComponentName", None)
+            )
+            get_component_model_name = (
+                getattr(render_models, "GetComponentRenderModelName", None)
+                or getattr(render_models, "getComponentRenderModelName", None)
+            )
+            if render_model_name and get_component_count and get_component_name and get_component_model_name:
+                try:
+                    component_count = int(get_component_count(render_model_name))
+                except Exception:
+                    component_count = 0
+                for component_idx in range(max(component_count, 0)):
+                    try:
+                        name_result = get_component_name(render_model_name, component_idx)
+                    except Exception:
+                        continue
+                    if isinstance(name_result, tuple):
+                        component_name = next((item for item in name_result if isinstance(item, str)), "")
+                    else:
+                        component_name = name_result if isinstance(name_result, str) else ""
+                    component_name = component_name.strip()
+                    if not component_name:
+                        continue
+                    try:
+                        model_result = get_component_model_name(render_model_name, component_name)
+                    except Exception:
+                        continue
+                    if isinstance(model_result, tuple):
+                        component_model = next((item for item in model_result if isinstance(item, str)), "")
+                    else:
+                        component_model = model_result if isinstance(model_result, str) else ""
+                    _add(component_model)
+
+            device_class = system.getTrackedDeviceClass(tracker.index)
+            role = _get_prop_int(tracker.index, getattr(openvr, "Prop_ControllerRoleHint_Int32", -1))
+            left_role = getattr(openvr, "TrackedControllerRole_LeftHand", 1)
+            right_role = getattr(openvr, "TrackedControllerRole_RightHand", 2)
+
+            if device_class == getattr(openvr, "TrackedDeviceClass_Controller", 2):
+                if role == left_role:
+                    _add("vr_controller_knuckles_left")
+                    _add("pico_4_controller_left")
+                elif role == right_role:
+                    _add("vr_controller_knuckles_right")
+                    _add("pico_4_controller_right")
+                _add("vr_controller_vive_1_5")
+            elif device_class == getattr(openvr, "TrackedDeviceClass_GenericTracker", 3):
+                _add("vr_tracker_vive_3_0")
+                _add("tundra_tracker")
+            elif device_class == getattr(openvr, "TrackedDeviceClass_HMD", 1):
+                _add("generic_hmd")
+            elif device_class == getattr(openvr, "TrackedDeviceClass_TrackingReference", 4):
+                _add("lh_basestation_valve_gen2")
+                _add("lh_basestation_vive")
+
+            return candidates
+
 
         def _get_or_import_model(render_model_token: str) -> bpy.types.Object | None:
             token = (render_model_token or "").strip()
@@ -575,8 +646,11 @@ class CreateRefsOperator(bpy.types.Operator):
 
             print(">", tracker_name)
 
-            model_token = _resolve_openvr_model_token(tracker)
-            model = _get_or_import_model(model_token) if model_token else None
+            model = None
+            for model_token in _resolve_openvr_model_tokens(tracker):
+                model = _get_or_import_model(model_token)
+                if model:
+                    break
 
             if not model:
                 print(f"Could not resolve model for {tracker_name}; skipping")
