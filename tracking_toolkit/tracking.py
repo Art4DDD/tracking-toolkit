@@ -25,10 +25,6 @@ recording_active = False
 action_sets = []
 action_handles = {}
 
-last_input_diag_time = 0.0
-skeletal_status = "Not initialized"
-skeletal_diag = {"left": "n/a", "right": "n/a"}
-
 FINGER_BONE_CHAINS = {
     "thumb": (2, 3, 4, 5),
     "index": (6, 7, 8, 9, 10),
@@ -39,7 +35,6 @@ FINGER_BONE_CHAINS = {
 
 
 def init_handles():
-    global skeletal_status
     vr_ipt = openvr.VRInput()
 
     def _get_action_set_handle(action_set_path: str):
@@ -65,31 +60,6 @@ def init_handles():
         "r_skeleton": _get_action_handle("/actions/default/in/SkeletonRightHand"),
     }
 
-    invalid_handle = getattr(openvr, "k_ulInvalidActionHandle", 0)
-    if action_handles["l_skeleton"] in (None, invalid_handle):
-        print("[OpenVR] Failed to get action handle: /actions/default/in/SkeletonLeftHand")
-    if action_handles["r_skeleton"] in (None, invalid_handle):
-        print("[OpenVR] Failed to get action handle: /actions/default/in/SkeletonRightHand")
-
-    action_set_handle = action_sets[0].ulActionSet
-    if not action_set_handle:
-        print("[OpenVR] Failed to get action set handle: /actions/default")
-
-    has_action_data = hasattr(vr_ipt, "getSkeletalActionData") or hasattr(vr_ipt, "GetSkeletalActionData")
-    has_summary = hasattr(vr_ipt, "getSkeletalSummaryData") or hasattr(vr_ipt, "GetSkeletalSummaryData")
-    has_bone_data = hasattr(vr_ipt, "getSkeletalBoneData") or hasattr(vr_ipt, "GetSkeletalBoneData")
-
-    if not has_action_data:
-        skeletal_status = "pyopenvr has no SkeletalActionData API (update pyopenvr build)"
-    elif not (has_summary or has_bone_data):
-        skeletal_status = "pyopenvr missing SkeletalSummaryData/BoneData API"
-    elif action_sets[0].ulActionSet == 0:
-        skeletal_status = "Action set '/actions/default' not found"
-    elif action_handles["l_skeleton"] in (None, invalid_handle) or action_handles["r_skeleton"] in (None, invalid_handle):
-        skeletal_status = "Skeleton action handle missing (check actions.json/bindings)"
-    else:
-        skeletal_status = "Skeletal API initialized"
-
     print("Initialized OpenVR skeletal action handles")
 
 
@@ -99,9 +69,7 @@ def _handle_input(ovr_context: OVRContext):
 
 
 def _get_input(ovr_context: OVRContext):
-    global skeletal_status
     if not (action_handles and action_sets):
-        skeletal_status = "Action handles not initialized"
         return
 
     vr_ipt = openvr.VRInput()
@@ -126,9 +94,6 @@ def _get_input(ovr_context: OVRContext):
             update_errors.append(str(e))
 
     if not updated:
-        err_text = " | ".join(update_errors) if update_errors else "unknown updateActionState error"
-        print(f"[OpenVR] updateActionState failed: {err_text}")
-        skeletal_status = f"updateActionState failed: {err_text}"
         return
 
     def _calc_finger_curl(bone_transforms, chain: tuple[int, ...]) -> float:
@@ -162,24 +127,18 @@ def _get_input(ovr_context: OVRContext):
         hand = "left" if action_key.startswith("l_") else "right"
         action = action_handles.get(action_key)
         if action is None:
-            skeletal_diag[hand] = "action handle is None"
             return None
 
         get_action_data_fn = getattr(vr_ipt, "getSkeletalActionData", None) or getattr(vr_ipt, "GetSkeletalActionData", None)
         if not get_action_data_fn:
-            skeletal_diag[hand] = "binding has no getSkeletalActionData"
             return None
 
         try:
             action_data = get_action_data_fn(action)
-        except Exception as e:
-            print(f"[OpenVR] getSkeletalActionData failed for {action_key}: {e}")
-            skeletal_diag[hand] = f"getSkeletalActionData failed: {e}"
+        except Exception:
             return None
 
         if not getattr(action_data, "bActive", False):
-            active_origin = getattr(action_data, "activeOrigin", 0)
-            skeletal_diag[hand] = f"inactive (activeOrigin={active_origin})"
             return None
 
         # 1) Preferred path: skeletal summary already contains per-finger curls.
@@ -213,7 +172,6 @@ def _get_input(ovr_context: OVRContext):
         if summary is not None:
             curls = getattr(summary, "flFingerCurl", None) or getattr(summary, "fingerCurl", None)
             if curls and len(curls) >= 5:
-                skeletal_diag[hand] = "active via skeletal summary"
                 return {
                     "thumb": float(curls[0]),
                     "index": float(curls[1]),
@@ -225,10 +183,6 @@ def _get_input(ovr_context: OVRContext):
         # 2) Fallback path: estimate curls from skeletal bone transforms.
         get_bone_data_fn = getattr(vr_ipt, "getSkeletalBoneData", None) or getattr(vr_ipt, "GetSkeletalBoneData", None)
         if not get_bone_data_fn:
-            if summary_error:
-                skeletal_diag[hand] = f"summary unavailable: {summary_error}"
-            else:
-                skeletal_diag[hand] = "no skeletal summary or bone API"
             return None
 
         transform_space = getattr(openvr, "VRSkeletalTransformSpace_Model", 0)
@@ -254,12 +208,6 @@ def _get_input(ovr_context: OVRContext):
             bone_transforms = bone_transforms[0]
 
         if not bone_transforms:
-            if bone_error:
-                skeletal_diag[hand] = f"GetSkeletalBoneData failed: {bone_error!r}"
-            elif summary_error:
-                skeletal_diag[hand] = f"summary unavailable: {summary_error!r}"
-            else:
-                skeletal_diag[hand] = "bone data empty"
             return None
 
         result = {}
@@ -267,7 +215,6 @@ def _get_input(ovr_context: OVRContext):
             valid_chain = tuple(idx for idx in chain if idx < len(bone_transforms))
             result[finger_name] = _calc_finger_curl(bone_transforms, valid_chain)
 
-        skeletal_diag[hand] = "active via bone data fallback"
         return result
 
     l_skeletal = _get_skeletal_finger_curls("l_skeleton")
@@ -286,19 +233,6 @@ def _get_input(ovr_context: OVRContext):
         r_ipt.ring_curl = r_skeletal["ring"]
         r_ipt.pinky_curl = r_skeletal["pinky"]
 
-    if l_skeletal or r_skeletal:
-        skeletal_status = "Skeletal input active"
-    else:
-        skeletal_status = f"Skeletal inactive | L: {skeletal_diag['left']} | R: {skeletal_diag['right']}"
-
-    # Lightweight diagnostics (once per ~2 seconds)
-    global last_input_diag_time
-    now = datetime.datetime.now().timestamp()
-    if now - last_input_diag_time > 2.0:
-        last_input_diag_time = now
-        l_active = l_skeletal is not None
-        r_active = r_skeletal is not None
-        print(f"[OpenVR] Skeleton active: L={l_active} R={r_active}; curls L=({l_ipt.thumb_curl:.2f},{l_ipt.index_curl:.2f},{l_ipt.middle_curl:.2f},{l_ipt.ring_curl:.2f},{l_ipt.pinky_curl:.2f})")
 
 
 def _get_poses(ovr_context: OVRContext) -> Generator[tuple[datetime.datetime, OVRTracker, Matrix], None, None]:
@@ -566,13 +500,6 @@ def stop_preview():
     print("OpenVR Preview Stopped")
 
 
-
-def get_skeletal_status() -> str:
-    return skeletal_status
-
-
-def get_skeletal_diag() -> dict:
-    return skeletal_diag.copy()
 
 def load_trackers(ovr_context: OVRContext):
     print("OpenVR Loading Trackers")
