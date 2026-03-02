@@ -58,15 +58,13 @@ def _set_action_slot_if_supported(obj: bpy.types.Object, action: bpy.types.Actio
         pass
 
 def _get_tracker_live_object(tracker: OVRTracker) -> bpy.types.Object | None:
-    if tracker.target.object:
-        return tracker.target.object
-
+    # Main source of truth: object that receives live OpenVR pose updates.
     existing_obj = bpy.data.objects.get(tracker.name)
     if existing_obj:
-        tracker.target.object = existing_obj
         return existing_obj
 
-    return None
+    # Fallback for projects where mapping is not name-based.
+    return tracker.target.object
 
 
 def init_handles():

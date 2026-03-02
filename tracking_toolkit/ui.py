@@ -158,7 +158,7 @@ class RecorderPanel(View3DPanel, bpy.types.Panel):
                 right_role = getattr(openvr, "TrackedControllerRole_RightHand", 2)
 
                 for tracker in ovr_context.trackers:
-                    tracker_obj = tracker.target.object or bpy.data.objects.get(tracker.name)
+                    tracker_obj = bpy.data.objects.get(tracker.name) or tracker.target.object
                     if tracker.type != controller_type or not tracker_obj:
                         continue
                     try:
@@ -174,9 +174,9 @@ class RecorderPanel(View3DPanel, bpy.types.Panel):
                 pass
 
             if not left_obj:
-                left_obj = next(((t.target.object or bpy.data.objects.get(t.name)) for t in ovr_context.trackers if t.type == controller_type and "left" in t.name.lower()), None)
+                left_obj = next(((bpy.data.objects.get(t.name) or t.target.object) for t in ovr_context.trackers if t.type == controller_type and "left" in t.name.lower()), None)
             if not right_obj:
-                right_obj = next(((t.target.object or bpy.data.objects.get(t.name)) for t in ovr_context.trackers if t.type == controller_type and "right" in t.name.lower()), None)
+                right_obj = next(((bpy.data.objects.get(t.name) or t.target.object) for t in ovr_context.trackers if t.type == controller_type and "right" in t.name.lower()), None)
 
             return left_obj, right_obj
 
