@@ -123,6 +123,26 @@ class RecorderPanel(View3DPanel, bpy.types.Panel):
             depress=True,
         )
 
+        # Controller input debug
+        layout.label(text="Controller Input")
+
+        def draw_input_block(block_layout, title: str, input_prop):
+            box = block_layout.box()
+            box.label(text=title)
+            box.prop(input_prop, "joystick_position", text="Joystick")
+            box.prop(input_prop, "trigger_strength", text="Trigger")
+            box.prop(input_prop, "grip_strength", text="Grip")
+            box.prop(input_prop, "thumb_curl", text="Thumb")
+            box.prop(input_prop, "index_curl", text="Index")
+            box.prop(input_prop, "middle_curl", text="Middle")
+            box.prop(input_prop, "ring_curl", text="Ring")
+            box.prop(input_prop, "pinky_curl", text="Pinky")
+            box.prop(input_prop, "a_button", text="A")
+            box.prop(input_prop, "b_button", text="B")
+
+        draw_input_block(layout, "Left Controller", ovr_context.l_input)
+        draw_input_block(layout, "Right Controller", ovr_context.r_input)
+
 
 class ArmaturePanel(View3DPanel, bpy.types.Panel):
     bl_idname = "VIEW3D_PT_openvr_armature_menu"
