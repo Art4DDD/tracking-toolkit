@@ -416,10 +416,10 @@ class CreateRefsOperator(bpy.types.Operator):
                 install_dir / "drivers" / "indexcontroller" / "resources" / "rendermodels" / "valve_controller_knu_ev2_0_right" / "valve_controller_knu_ev2_0_right.obj",
             ],
             "pico_controller_left": [
-                install_dir / "drivers" / "vrlink" / "resources" / "rendermodels" / "pico_4_controller_left" / "pico_4_controller_left.obj",
+                install_dir / "drivers" / "vrlink" / "resources" / "rendermodels" / "pico_4_controller_left" / "pico_4_controller_left_body.obj",
             ],
             "pico_controller_right": [
-                install_dir / "drivers" / "vrlink" / "resources" / "rendermodels" / "pico_4_controller_right" / "pico_4_controller_right.obj",
+                install_dir / "drivers" / "vrlink" / "resources" / "rendermodels" / "pico_4_controller_right" / "pico_4_controller_rightt_body.obj",
             ],
             "tundra_tracker": [
                 install_dir / "drivers" / "tundra_labs" / "resources" / "rendermodels" / "tundra_tracker" / "tundra_tracker.obj",
