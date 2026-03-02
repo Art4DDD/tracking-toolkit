@@ -1,6 +1,7 @@
 import datetime
 import queue
 import threading
+from pathlib import Path
 from typing import Generator
 
 import bpy
@@ -35,6 +36,13 @@ FINGER_BONE_CHAINS = {
 
 def init_handles():
     vr_ipt = openvr.VRInput()
+
+    manifest_path = Path(__file__).resolve().parent / "actions.json"
+    try:
+        vr_ipt.setActionManifestPath(str(manifest_path))
+        print(f"OpenVR action manifest set: {manifest_path}")
+    except Exception as ex:
+        print(f"OpenVR failed to set action manifest ({manifest_path}): {ex}")
 
     def _get_action_set_handle(action_set_path: str):
         try:
