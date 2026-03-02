@@ -1,0 +1,19 @@
+{
+  "bindings": {
+    "/actions/default": {
+      "skeleton": [
+        {
+          "output": "/actions/default/in/SkeletonLeftHand",
+          "path": "/user/hand/left/input/skeleton/left"
+        },
+        {
+          "output": "/actions/default/in/SkeletonRightHand",
+          "path": "/user/hand/right/input/skeleton/right"
+        }
+      ]
+    }
+  },
+  "controller_type": "knuckles",
+  "description": "Tracking Toolkit Knuckles skeleton bindings",
+  "name": "tracking_toolkit_knuckles"
+}
