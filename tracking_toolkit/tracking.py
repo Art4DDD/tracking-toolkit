@@ -24,6 +24,14 @@ recording_active = False
 action_sets = []
 action_handles = {}
 
+FINGER_BONE_CHAINS = {
+    "thumb": (2, 3, 4, 5),
+    "index": (6, 7, 8, 9, 10),
+    "middle": (11, 12, 13, 14, 15),
+    "ring": (16, 17, 18, 19, 20),
+    "pinky": (21, 22, 23, 24, 25),
+}
+
 
 def init_handles():
     vr_ipt = openvr.VRInput()
@@ -187,6 +195,18 @@ def init_handles():
             "/actions/main/in/RightPinky",
             "/actions/default/in/RightPinky",
         ]),
+
+        # Skeletal actions from default SteamVR manifest (Knuckles)
+        "l_skeleton": _get_action_handle_first([
+            "/actions/default/in/SkeletonLeftHand",
+            "/actions/default/in/skeletonlefthand",
+            "/actions/main/in/SkeletonLeftHand",
+        ]),
+        "r_skeleton": _get_action_handle_first([
+            "/actions/default/in/SkeletonRightHand",
+            "/actions/default/in/skeletonrighthand",
+            "/actions/main/in/SkeletonRightHand",
+        ]),
     }
 
     print("Initialized OpenVR action handles")
@@ -238,6 +258,76 @@ def _get_input(ovr_context: OVRContext):
         except Exception:
             return default
 
+    def _calc_finger_curl(bone_transforms, chain: tuple[int, ...]) -> float:
+        # Use alignment between each segment and its parent as a curl signal.
+        # 0 -> extended, 1 -> curled.
+        if len(chain) < 2:
+            return 0.0
+
+        curls = []
+        for i in range(len(chain) - 1):
+            parent_idx = chain[i]
+            child_idx = chain[i + 1]
+            parent = bone_transforms[parent_idx]
+            child = bone_transforms[child_idx]
+
+            pv = parent.position.v
+            cv = child.position.v
+            vec = (cv[0] - pv[0], cv[1] - pv[1], cv[2] - pv[2])
+            length = (vec[0] ** 2 + vec[1] ** 2 + vec[2] ** 2) ** 0.5
+            if length <= 1e-6:
+                continue
+
+            # Treat the local forward axis as +Y in model space; convert deviation into curl.
+            forward = vec[1] / length
+            curl = max(0.0, min(1.0, (1.0 - forward) * 0.5))
+            curls.append(curl)
+
+        if not curls:
+            return 0.0
+
+        return sum(curls) / len(curls)
+
+    def _get_skeletal_finger_curls(action_key: str) -> dict[str, float] | None:
+        action = action_handles.get(action_key)
+        if action is None:
+            return None
+
+        if not hasattr(vr_ipt, "getSkeletalActionData") or not hasattr(vr_ipt, "getSkeletalBoneData"):
+            return None
+
+        try:
+            action_data = vr_ipt.getSkeletalActionData(action)
+        except Exception:
+            return None
+
+        if not getattr(action_data, "bActive", False):
+            return None
+
+        transform_space = getattr(openvr, "VRSkeletalTransformSpace_Model", 0)
+        motion_range = getattr(openvr, "VRSkeletalMotionRange_WithController", 0)
+        bone_count = getattr(openvr, "k_unSkeletonBoneCount", 31)
+
+        try:
+            bone_transforms = vr_ipt.getSkeletalBoneData(action, transform_space, motion_range)
+        except TypeError:
+            try:
+                bone_transforms = vr_ipt.getSkeletalBoneData(action, transform_space, motion_range, bone_count)
+            except Exception:
+                return None
+        except Exception:
+            return None
+
+        if not bone_transforms:
+            return None
+
+        result = {}
+        for finger_name, chain in FINGER_BONE_CHAINS.items():
+            valid_chain = tuple(idx for idx in chain if idx < len(bone_transforms))
+            result[finger_name] = _calc_finger_curl(bone_transforms, valid_chain)
+
+        return result
+
     # Axis values
     l_ipt.joystick_position = _get_analog_vector("l_joystick")
     r_ipt.joystick_position = _get_analog_vector("r_joystick")
@@ -265,6 +355,23 @@ def _get_input(ovr_context: OVRContext):
     r_ipt.middle_curl = _get_analog_value("r_middle", r_ipt.grip_strength)
     r_ipt.ring_curl = _get_analog_value("r_ring", r_ipt.grip_strength)
     r_ipt.pinky_curl = _get_analog_value("r_pinky", r_ipt.grip_strength)
+
+    # Prefer true skeletal hand input when available (Index/Knuckles)
+    l_skeletal = _get_skeletal_finger_curls("l_skeleton")
+    if l_skeletal:
+        l_ipt.thumb_curl = l_skeletal["thumb"]
+        l_ipt.index_curl = l_skeletal["index"]
+        l_ipt.middle_curl = l_skeletal["middle"]
+        l_ipt.ring_curl = l_skeletal["ring"]
+        l_ipt.pinky_curl = l_skeletal["pinky"]
+
+    r_skeletal = _get_skeletal_finger_curls("r_skeleton")
+    if r_skeletal:
+        r_ipt.thumb_curl = r_skeletal["thumb"]
+        r_ipt.index_curl = r_skeletal["index"]
+        r_ipt.middle_curl = r_skeletal["middle"]
+        r_ipt.ring_curl = r_skeletal["ring"]
+        r_ipt.pinky_curl = r_skeletal["pinky"]
 
 
 def _get_poses(ovr_context: OVRContext) -> Generator[tuple[datetime.datetime, OVRTracker, Matrix], None, None]:
