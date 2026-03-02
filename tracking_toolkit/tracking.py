@@ -37,6 +37,26 @@ FINGER_BONE_CHAINS = {
 }
 
 
+
+def _ensure_finger_properties(target_obj: bpy.types.Object):
+    for channel in FINGER_CHANNELS:
+        if channel not in target_obj:
+            target_obj[channel] = 0.0
+
+
+def _set_action_slot_if_supported(obj: bpy.types.Object, action: bpy.types.Action):
+    slots = getattr(action, "slots", None)
+    if not slots:
+        return
+
+    if obj.animation_data is None:
+        obj.animation_data_create()
+
+    try:
+        obj.animation_data.action_slot = slots[0]
+    except Exception:
+        pass
+
 def init_handles():
     vr_ipt = openvr.VRInput()
 
@@ -67,8 +87,25 @@ def init_handles():
 
 
 def _handle_input(ovr_context: OVRContext):
-    l_ipt = ovr_context.l_input
-    r_ipt = ovr_context.r_input
+    controller_targets = _resolve_controller_targets(ovr_context)
+
+    left_obj = controller_targets.get("left")
+    if left_obj:
+        _ensure_finger_properties(left_obj)
+        left_obj["thumb_curl"] = ovr_context.l_input.thumb_curl
+        left_obj["index_curl"] = ovr_context.l_input.index_curl
+        left_obj["middle_curl"] = ovr_context.l_input.middle_curl
+        left_obj["ring_curl"] = ovr_context.l_input.ring_curl
+        left_obj["pinky_curl"] = ovr_context.l_input.pinky_curl
+
+    right_obj = controller_targets.get("right")
+    if right_obj:
+        _ensure_finger_properties(right_obj)
+        right_obj["thumb_curl"] = ovr_context.r_input.thumb_curl
+        right_obj["index_curl"] = ovr_context.r_input.index_curl
+        right_obj["middle_curl"] = ovr_context.r_input.middle_curl
+        right_obj["ring_curl"] = ovr_context.r_input.ring_curl
+        right_obj["pinky_curl"] = ovr_context.r_input.pinky_curl
 
 
 def _get_input(ovr_context: OVRContext):
@@ -264,6 +301,7 @@ def _resolve_controller_targets(ovr_context: OVRContext) -> dict[str, bpy.types.
     right_role = getattr(openvr, "TrackedControllerRole_RightHand", 2)
 
     targets = {}
+    unresolved = []
     for tracker in ovr_context.trackers:
         if tracker.type != str(openvr.TrackedDeviceClass_Controller):
             continue
@@ -275,12 +313,22 @@ def _resolve_controller_targets(ovr_context: OVRContext) -> dict[str, bpy.types.
         try:
             role = system.getInt32TrackedDeviceProperty(tracker.index, role_prop)
         except Exception:
-            continue
+            role = None
 
         if role == left_role:
             targets["left"] = target_obj
         elif role == right_role:
             targets["right"] = target_obj
+        else:
+            unresolved.append((tracker, target_obj))
+
+    if "left" not in targets or "right" not in targets:
+        for tracker, target_obj in unresolved:
+            tracker_name = tracker.name.lower()
+            if "left" not in targets and ("left" in tracker_name or "_l" in tracker_name or tracker_name.endswith(".l")):
+                targets["left"] = target_obj
+            elif "right" not in targets and ("right" in tracker_name or "_r" in tracker_name or tracker_name.endswith(".r")):
+                targets["right"] = target_obj
 
     return targets
 
@@ -507,8 +555,7 @@ def _insert_action(ovr_context: OVRContext):
 
         # Select first action slot
         # Otherwise, the new keyframes will not show
-        action_slot = action.slots[0]
-        tracker_obj.animation_data.action_slot = action_slot
+        _set_action_slot_if_supported(tracker_obj, action)
 
     if num_input_samples > 0:
         controller_targets = _resolve_controller_targets(ovr_context)
@@ -537,9 +584,8 @@ def _insert_action(ovr_context: OVRContext):
                 action = bpy.data.actions.new(name=f"{target_obj.name}_Input_Action")
                 target_obj.animation_data.action = action
 
+            _ensure_finger_properties(target_obj)
             for channel in FINGER_CHANNELS:
-                if channel not in target_obj:
-                    target_obj[channel] = 0.0
 
                 data_path = f'["{channel}"]'
 
@@ -560,8 +606,7 @@ def _insert_action(ovr_context: OVRContext):
                 if values:
                     target_obj[channel] = values[-1]
 
-            action_slot = action.slots[0]
-            target_obj.animation_data.action_slot = action_slot
+            _set_action_slot_if_supported(target_obj, action)
 
     print("Done")
 

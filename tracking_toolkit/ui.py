@@ -1,4 +1,5 @@
 import bpy
+import openvr
 from bl_ui.space_view3d_toolbar import View3DPanel
 
 from .operators import (
@@ -135,8 +136,63 @@ class RecorderPanel(View3DPanel, bpy.types.Panel):
             box.prop(input_prop, "ring_curl", text="Ring")
             box.prop(input_prop, "pinky_curl", text="Pinky")
 
-        draw_finger_block(layout, "Left Hand", ovr_context.l_input)
-        draw_finger_block(layout, "Right Hand", ovr_context.r_input)
+        def draw_controller_props(block_layout, title: str, controller_obj: bpy.types.Object | None):
+            box = block_layout.box()
+            box.label(text=title)
+            if not controller_obj:
+                box.label(text="Controller reference not found", icon="ERROR")
+                return
+
+            box.label(text=f"Object: {controller_obj.name}")
+            for channel, label in (
+                ("thumb_curl", "Thumb"),
+                ("index_curl", "Index"),
+                ("middle_curl", "Middle"),
+                ("ring_curl", "Ring"),
+                ("pinky_curl", "Pinky"),
+            ):
+                box.label(text=f"{label}: {controller_obj.get(channel, 0.0):.3f}")
+
+        draw_finger_block(layout, "Left Hand (Input State)", ovr_context.l_input)
+        draw_finger_block(layout, "Right Hand (Input State)", ovr_context.r_input)
+
+        def resolve_controller_objects() -> tuple[bpy.types.Object | None, bpy.types.Object | None]:
+            left_obj = None
+            right_obj = None
+            controller_type = str(openvr.TrackedDeviceClass_Controller)
+
+            try:
+                system = openvr.VRSystem()
+                role_prop = openvr.Prop_ControllerRoleHint_Int32
+                left_role = getattr(openvr, "TrackedControllerRole_LeftHand", 1)
+                right_role = getattr(openvr, "TrackedControllerRole_RightHand", 2)
+
+                for tracker in ovr_context.trackers:
+                    if tracker.type != controller_type or not tracker.target.object:
+                        continue
+                    try:
+                        role = system.getInt32TrackedDeviceProperty(tracker.index, role_prop)
+                    except Exception:
+                        role = None
+
+                    if role == left_role:
+                        left_obj = tracker.target.object
+                    elif role == right_role:
+                        right_obj = tracker.target.object
+            except Exception:
+                pass
+
+            if not left_obj:
+                left_obj = next((t.target.object for t in ovr_context.trackers if t.type == controller_type and "left" in t.name.lower()), None)
+            if not right_obj:
+                right_obj = next((t.target.object for t in ovr_context.trackers if t.type == controller_type and "right" in t.name.lower()), None)
+
+            return left_obj, right_obj
+
+        left_controller, right_controller = resolve_controller_objects()
+
+        draw_controller_props(layout, "Left Controller Custom Properties", left_controller)
+        draw_controller_props(layout, "Right Controller Custom Properties", right_controller)
 
 
 class ArmaturePanel(View3DPanel, bpy.types.Panel):
