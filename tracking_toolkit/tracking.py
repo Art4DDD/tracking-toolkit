@@ -151,6 +151,45 @@ def _extract_input_profile_info(raw_input_profile_path: str) -> dict[str, str]:
     return info
 
 
+
+
+def _extract_driver_metadata(fields: dict[str, str]) -> dict[str, str]:
+    info: dict[str, str] = {}
+
+    registered = (fields.get("registereddevicetype") or "").strip()
+    if registered:
+        info["registered_device_type_raw"] = registered
+        # Usually looks like: "<driver>/<device>".
+        if "/" in registered:
+            driver, _, device = registered.partition("/")
+            if driver:
+                info["registered_device_driver"] = driver
+            if device:
+                info["registered_device_name"] = device
+
+    resource_root = (fields.get("resourceroot") or "").strip()
+    if resource_root:
+        info["resource_root_raw"] = resource_root
+        normalized = resource_root.replace("\\", "/")
+        if normalized.startswith("{") and "}" in normalized:
+            end_idx = normalized.find("}")
+            if end_idx > 1:
+                info["resource_root_driver"] = normalized[1:end_idx]
+                info["resource_root_relative_path"] = normalized[end_idx + 1:].lstrip("/")
+        else:
+            # Some drivers expose plain id here, e.g. "lighthouse", "pico".
+            info["resource_root_driver"] = normalized.split("/")[0]
+
+    tracking_system = (fields.get("trackingsystemname") or "").strip()
+    if tracking_system:
+        info["tracking_system_name"] = tracking_system
+
+    driver_version = (fields.get("driverversion") or "").strip()
+    if driver_version:
+        info["driver_version"] = driver_version
+
+    return info
+
 def _collect_tracker_debug_info(system, device_index: int, device_class: int) -> dict[str, str]:
     fields = {
         "index": str(device_index),
@@ -195,6 +234,8 @@ def _collect_tracker_debug_info(system, device_index: int, device_class: int) ->
     input_profile_path = fields.get("inputprofilepath") or fields.get("inputprofilepath_string")
     if input_profile_path:
         fields.update(_extract_input_profile_info(input_profile_path))
+
+    fields.update(_extract_driver_metadata(fields))
 
     return fields
 
