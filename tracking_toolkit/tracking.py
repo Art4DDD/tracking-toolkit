@@ -774,7 +774,10 @@ def _pose_vis_timer():
     if active_ovr_context and getattr(active_ovr_context, "enabled", False):
         now = datetime.datetime.now(datetime.timezone.utc)
         if (now - last_new_tracker_check).total_seconds() >= 2.0:
-            _append_new_trackers_only(active_ovr_context)
+            try:
+                _append_new_trackers_only(active_ovr_context)
+            except Exception as exc:
+                print(f"[OpenVR] Failed to append new trackers: {exc}")
             last_new_tracker_check = now
 
     return 1.0 / 60  # 60hz
@@ -986,6 +989,13 @@ def start_preview(ovr_context: OVRContext):
     stop_thread_flag.clear()
     active_ovr_context = ovr_context
     last_new_tracker_check = datetime.datetime.min
+
+    try:
+        _append_new_trackers_only(ovr_context)
+        last_new_tracker_check = datetime.datetime.now(datetime.timezone.utc)
+    except Exception as exc:
+        print(f"[OpenVR] Initial tracker append failed: {exc}")
+
     polling_thread = threading.Thread(target=lambda: _openvr_poll_thread_func(ovr_context))
     polling_thread.daemon = True  # Quit with Blender
     polling_thread.start()
@@ -1044,6 +1054,7 @@ def _append_new_trackers_only(ovr_context: OVRContext):
         tracker.type = str(device_class)
         tracker.index = i
         tracker.connected = bool(system.isTrackedDeviceConnected(i))
+        print(f"[OpenVR] New tracker detected: index={i} name={unique_name} serial={tracker_serial}")
 
         debug_info = _collect_tracker_debug_info(system, i, device_class)
         if debug_info:
