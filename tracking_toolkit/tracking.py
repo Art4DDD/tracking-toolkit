@@ -190,6 +190,110 @@ def _extract_driver_metadata(fields: dict[str, str]) -> dict[str, str]:
 
     return info
 
+
+
+def _collect_driver_registry_info() -> dict[str, str]:
+    info: dict[str, str] = {}
+
+    driver_manager_factory = getattr(openvr, "VRDriverManager", None)
+    if not driver_manager_factory:
+        return info
+
+    try:
+        driver_manager = driver_manager_factory()
+    except Exception:
+        return info
+
+    get_count = (
+        getattr(driver_manager, "getDriverCount", None)
+        or getattr(driver_manager, "GetDriverCount", None)
+    )
+    get_name = (
+        getattr(driver_manager, "getDriverName", None)
+        or getattr(driver_manager, "GetDriverName", None)
+    )
+    if not get_count or not get_name:
+        return info
+
+    try:
+        count = int(get_count())
+    except Exception:
+        return info
+
+    names: list[str] = []
+    for idx in range(max(count, 0)):
+        try:
+            value = get_name(idx)
+        except Exception:
+            continue
+
+        if isinstance(value, tuple):
+            name = next((item for item in value if isinstance(item, str)), "")
+        else:
+            name = value if isinstance(value, str) else ""
+
+        name = (name or "").strip()
+        if name:
+            names.append(name)
+
+    if names:
+        info["driver_registry_count"] = str(len(names))
+        info["driver_registry_names"] = ",".join(sorted(set(names)))
+
+    return info
+
+
+def _collect_render_model_registry_info() -> dict[str, str]:
+    info: dict[str, str] = {}
+
+    render_models_factory = getattr(openvr, "VRRenderModels", None)
+    if not render_models_factory:
+        return info
+
+    try:
+        render_models = render_models_factory()
+    except Exception:
+        return info
+
+    get_count = (
+        getattr(render_models, "getRenderModelCount", None)
+        or getattr(render_models, "GetRenderModelCount", None)
+    )
+    get_name = (
+        getattr(render_models, "getRenderModelName", None)
+        or getattr(render_models, "GetRenderModelName", None)
+    )
+
+    if not get_count or not get_name:
+        return info
+
+    try:
+        count = int(get_count())
+    except Exception:
+        return info
+
+    info["render_model_registry_count"] = str(max(count, 0))
+
+    sample: list[str] = []
+    for idx in range(min(max(count, 0), 40)):
+        try:
+            value = get_name(idx)
+        except Exception:
+            continue
+
+        if isinstance(value, tuple):
+            name = next((item for item in value if isinstance(item, str)), "")
+        else:
+            name = value if isinstance(value, str) else ""
+        name = (name or "").strip()
+        if name:
+            sample.append(name)
+
+    if sample:
+        info["render_model_registry_sample"] = ",".join(sample)
+
+    return info
+
 def _collect_tracker_debug_info(system, device_index: int, device_class: int) -> dict[str, str]:
     fields = {
         "index": str(device_index),
@@ -236,6 +340,8 @@ def _collect_tracker_debug_info(system, device_index: int, device_class: int) ->
         fields.update(_extract_input_profile_info(input_profile_path))
 
     fields.update(_extract_driver_metadata(fields))
+    fields.update(_collect_driver_registry_info())
+    fields.update(_collect_render_model_registry_info())
 
     return fields
 
