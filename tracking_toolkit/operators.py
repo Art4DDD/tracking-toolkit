@@ -500,7 +500,7 @@ class CreateRefsOperator(bpy.types.Operator):
 
             direct_openvr_model = _resolve_openvr_model_obj_path(tracker)
             if direct_openvr_model:
-                print(f"[OpenVR ModelPath] device={tracker.index} source=openvr path={direct_openvr_model}")
+                print(f"[OpenVR ModelPath] device={tracker.index} path={direct_openvr_model}")
                 return direct_openvr_model
 
             render_model_name = render_model_raw.lower()
@@ -537,7 +537,6 @@ class CreateRefsOperator(bpy.types.Operator):
             for key in dict.fromkeys(keys):
                 for model_path in model_db.get(key, []):
                     if model_path.exists():
-                        print(f"[OpenVR ModelPath] device={tracker.index} source=fallback key={key} path={model_path}")
                         return model_path
 
             return None
