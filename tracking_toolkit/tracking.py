@@ -184,56 +184,82 @@ def _get_input(ovr_context: OVRContext):
 
         # 1) Preferred path: skeletal summary already contains per-finger curls.
         get_summary_fn = getattr(vr_ipt, "getSkeletalSummaryData", None) or getattr(vr_ipt, "GetSkeletalSummaryData", None)
+        summary = None
+        summary_error = None
         if get_summary_fn:
-            summary = None
-            try:
-                summary = get_summary_fn(action)
-            except TypeError:
-                summary_data_t = getattr(openvr, "InputSkeletalSummaryData_t", None)
-                if summary_data_t:
-                    try:
-                        summary = get_summary_fn(action, summary_data_t())
-                    except Exception:
-                        summary = None
-            except Exception:
-                summary = None
+            summary_data_t = getattr(openvr, "InputSkeletalSummaryData_t", None)
+            summary_type = getattr(openvr, "VRSummaryType_FromDevice", 1)
 
-            if summary is not None:
-                curls = getattr(summary, "flFingerCurl", None) or getattr(summary, "fingerCurl", None)
-                if curls and len(curls) >= 5:
-                    skeletal_diag[hand] = "active via skeletal summary"
-                    return {
-                        "thumb": float(curls[0]),
-                        "index": float(curls[1]),
-                        "middle": float(curls[2]),
-                        "ring": float(curls[3]),
-                        "pinky": float(curls[4]),
-                    }
+            summary_variants = [
+                lambda: get_summary_fn(action),
+                lambda: get_summary_fn(action, summary_type),
+            ]
+            if summary_data_t:
+                summary_variants.extend([
+                    lambda: get_summary_fn(action, summary_data_t()),
+                    lambda: get_summary_fn(action, summary_type, summary_data_t()),
+                ])
+
+            for summary_call in summary_variants:
+                try:
+                    summary = summary_call()
+                    break
+                except Exception as e:
+                    summary_error = e
+
+        if isinstance(summary, tuple) and len(summary) >= 1:
+            summary = summary[0]
+
+        if summary is not None:
+            curls = getattr(summary, "flFingerCurl", None) or getattr(summary, "fingerCurl", None)
+            if curls and len(curls) >= 5:
+                skeletal_diag[hand] = "active via skeletal summary"
+                return {
+                    "thumb": float(curls[0]),
+                    "index": float(curls[1]),
+                    "middle": float(curls[2]),
+                    "ring": float(curls[3]),
+                    "pinky": float(curls[4]),
+                }
 
         # 2) Fallback path: estimate curls from skeletal bone transforms.
         get_bone_data_fn = getattr(vr_ipt, "getSkeletalBoneData", None) or getattr(vr_ipt, "GetSkeletalBoneData", None)
         if not get_bone_data_fn:
-            skeletal_diag[hand] = "no skeletal summary or bone API"
+            if summary_error:
+                skeletal_diag[hand] = f"summary unavailable: {summary_error}"
+            else:
+                skeletal_diag[hand] = "no skeletal summary or bone API"
             return None
 
         transform_space = getattr(openvr, "VRSkeletalTransformSpace_Model", 0)
         motion_range = getattr(openvr, "VRSkeletalMotionRange_WithController", 0)
         bone_count = getattr(openvr, "k_unSkeletonBoneCount", 31)
 
-        try:
-            bone_transforms = get_bone_data_fn(action, transform_space, motion_range)
-        except TypeError:
+        bone_transforms = None
+        bone_error = None
+        bone_variants = [
+            lambda: get_bone_data_fn(action, transform_space, motion_range),
+            lambda: get_bone_data_fn(action, transform_space, motion_range, bone_count),
+            lambda: get_bone_data_fn(action, transform_space, motion_range, None, bone_count),
+        ]
+
+        for bone_call in bone_variants:
             try:
-                bone_transforms = get_bone_data_fn(action, transform_space, motion_range, bone_count)
+                bone_transforms = bone_call()
+                break
             except Exception as e:
-                skeletal_diag[hand] = f"GetSkeletalBoneData failed: {e}"
-                return None
-        except Exception as e:
-            skeletal_diag[hand] = f"GetSkeletalBoneData failed: {e}"
-            return None
+                bone_error = e
+
+        if isinstance(bone_transforms, tuple) and len(bone_transforms) >= 1:
+            bone_transforms = bone_transforms[0]
 
         if not bone_transforms:
-            skeletal_diag[hand] = "bone data empty"
+            if bone_error:
+                skeletal_diag[hand] = f"GetSkeletalBoneData failed: {bone_error!r}"
+            elif summary_error:
+                skeletal_diag[hand] = f"summary unavailable: {summary_error!r}"
+            else:
+                skeletal_diag[hand] = "bone data empty"
             return None
 
         result = {}
