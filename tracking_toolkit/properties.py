@@ -94,6 +94,12 @@ class OVRInput(bpy.types.PropertyGroup):
     grip_strength: bpy.props.FloatProperty(name="Grip strength", default=0)
     trigger_strength: bpy.props.FloatProperty(name="Trigger strength", default=0)
 
+    thumb_strength: bpy.props.FloatProperty(name="Thumb strength", default=0)
+    index_strength: bpy.props.FloatProperty(name="Index strength", default=0)
+    middle_strength: bpy.props.FloatProperty(name="Middle strength", default=0)
+    ring_strength: bpy.props.FloatProperty(name="Ring strength", default=0)
+    pinky_strength: bpy.props.FloatProperty(name="Pinky strength", default=0)
+
     a_button: bpy.props.BoolProperty(name="A pressed", default=False)
     b_button: bpy.props.BoolProperty(name="B pressed", default=False)
 

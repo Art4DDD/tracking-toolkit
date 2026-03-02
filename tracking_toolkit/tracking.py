@@ -34,22 +34,43 @@ def init_handles():
     action_set = action_sets[0]
     action_set.ulActionSet = vr_ipt.getActionSetHandle("/actions/legacy")
 
+    def _get_action_handle(*paths: str):
+        for path in paths:
+            try:
+                return vr_ipt.getActionHandle(path)
+            except Exception:
+                continue
+
+        return None
+
     global action_handles
     action_handles = {
-        "l_joystick": vr_ipt.getActionHandle("/actions/legacy/in/Left_Axis0_Value"),
-        "r_joystick": vr_ipt.getActionHandle("/actions/legacy/in/Right_Axis1_Value"),
+        "l_joystick": _get_action_handle("/actions/legacy/in/Left_Axis0_Value"),
+        "r_joystick": _get_action_handle("/actions/legacy/in/Right_Axis1_Value"),
 
-        "l_trigger": vr_ipt.getActionHandle("/actions/legacy/in/Left_Axis1_Value"),
-        "r_trigger": vr_ipt.getActionHandle("/actions/legacy/in/Right_Axis1_Value"),
+        "l_trigger": _get_action_handle("/actions/legacy/in/Left_Axis1_Value"),
+        "r_trigger": _get_action_handle("/actions/legacy/in/Right_Axis1_Value"),
 
-        "l_grip": vr_ipt.getActionHandle("/actions/legacy/in/Left_Axis2_Value"),
-        "r_grip": vr_ipt.getActionHandle("/actions/legacy/in/Right_Axis2_Value"),
+        "l_grip": _get_action_handle("/actions/legacy/in/Left_Axis2_Value"),
+        "r_grip": _get_action_handle("/actions/legacy/in/Right_Axis2_Value"),
 
-        "r_a": vr_ipt.getActionHandle("/actions/legacy/in/Right_A_Press"),
-        "l_a": vr_ipt.getActionHandle("/actions/legacy/in/Left_A_Press"),
+        # Legacy finger actions can differ by driver/runtime naming, so keep fallbacks.
+        "l_thumb": _get_action_handle("/actions/legacy/in/Left_Thumb_Value"),
+        "r_thumb": _get_action_handle("/actions/legacy/in/Right_Thumb_Value"),
+        "l_index": _get_action_handle("/actions/legacy/in/Left_Index_Value"),
+        "r_index": _get_action_handle("/actions/legacy/in/Right_Index_Value"),
+        "l_middle": _get_action_handle("/actions/legacy/in/Left_Middle_Value"),
+        "r_middle": _get_action_handle("/actions/legacy/in/Right_Middle_Value"),
+        "l_ring": _get_action_handle("/actions/legacy/in/Left_Ring_Value"),
+        "r_ring": _get_action_handle("/actions/legacy/in/Right_Ring_Value"),
+        "l_pinky": _get_action_handle("/actions/legacy/in/Left_Pinky_Value"),
+        "r_pinky": _get_action_handle("/actions/legacy/in/Right_Pinky_Value"),
 
-        "l_b": vr_ipt.getActionHandle("/actions/legacy/in/Left_ApplicationMenu_Press"),
-        "r_b": vr_ipt.getActionHandle("/actions/legacy/in/Right_ApplicationMenu_Press")
+        "r_a": _get_action_handle("/actions/legacy/in/Right_A_Press"),
+        "l_a": _get_action_handle("/actions/legacy/in/Left_A_Press"),
+
+        "l_b": _get_action_handle("/actions/legacy/in/Left_ApplicationMenu_Press"),
+        "r_b": _get_action_handle("/actions/legacy/in/Right_ApplicationMenu_Press")
     }
 
     print("Initialized OpenVR action handles")
@@ -70,24 +91,65 @@ def _get_input(ovr_context: OVRContext):
 
     vr_ipt.updateActionState(action_sets)
 
-    def _make_vector(action_data):
-        return action_data.x, action_data.x
+    def _analog_data(handle_key: str):
+        handle = action_handles.get(handle_key)
+        if handle is None:
+            return None
+
+        try:
+            return vr_ipt.getAnalogActionData(handle, 0)
+        except Exception:
+            return None
+
+    def _analog(handle_key: str, default: float = 0.0) -> float:
+        data = _analog_data(handle_key)
+        if data is None:
+            return default
+
+        return data.x
+
+    def _digital(handle_key: str, default: bool = False) -> bool:
+        handle = action_handles.get(handle_key)
+        if handle is None:
+            return default
+
+        try:
+            return vr_ipt.getDigitalActionData(handle, 0).bState
+        except Exception:
+            return default
 
     # Axis values
-    l_ipt.joystick_position = _make_vector(vr_ipt.getAnalogActionData(action_handles["l_joystick"], 0))
-    r_ipt.joystick_position = _make_vector(vr_ipt.getAnalogActionData(action_handles["r_joystick"], 0))
+    l_joy = _analog_data("l_joystick")
+    r_joy = _analog_data("r_joystick")
+    l_ipt.joystick_position = ((l_joy.x if l_joy else 0.0), (l_joy.y if l_joy else 0.0))
+    r_ipt.joystick_position = ((r_joy.x if r_joy else 0.0), (r_joy.y if r_joy else 0.0))
 
-    l_ipt.trigger_strength = vr_ipt.getAnalogActionData(action_handles["l_trigger"], 0).x
-    r_ipt.trigger_strength = vr_ipt.getAnalogActionData(action_handles["r_trigger"], 0).x
+    l_ipt.trigger_strength = _analog("l_trigger")
+    r_ipt.trigger_strength = _analog("r_trigger")
 
-    # l_ipt.grip_strength = vr_ipt.getAnalogActionData(action_handles["l_grip"], 0).x
-    # r_ipt.grip_strength = vr_ipt.getAnalogActionData(action_handles["r_grip"], 0).x
+    l_ipt.grip_strength = _analog("l_grip")
+    r_ipt.grip_strength = _analog("r_grip")
 
-    l_ipt.a_button = vr_ipt.getDigitalActionData(action_handles["l_a"], 0).bState
-    r_ipt.a_button = vr_ipt.getDigitalActionData(action_handles["r_a"], 0).bState
+    l_ipt.thumb_strength = _analog("l_thumb")
+    r_ipt.thumb_strength = _analog("r_thumb")
 
-    l_ipt.b_button = vr_ipt.getDigitalActionData(action_handles["l_b"], 0).bState
-    r_ipt.b_button = vr_ipt.getDigitalActionData(action_handles["r_b"], 0).bState
+    l_ipt.index_strength = _analog("l_index", l_ipt.trigger_strength)
+    r_ipt.index_strength = _analog("r_index", r_ipt.trigger_strength)
+
+    l_ipt.middle_strength = _analog("l_middle", l_ipt.grip_strength)
+    r_ipt.middle_strength = _analog("r_middle", r_ipt.grip_strength)
+
+    l_ipt.ring_strength = _analog("l_ring", l_ipt.grip_strength)
+    r_ipt.ring_strength = _analog("r_ring", r_ipt.grip_strength)
+
+    l_ipt.pinky_strength = _analog("l_pinky", l_ipt.grip_strength)
+    r_ipt.pinky_strength = _analog("r_pinky", r_ipt.grip_strength)
+
+    l_ipt.a_button = _digital("l_a")
+    r_ipt.a_button = _digital("r_a")
+
+    l_ipt.b_button = _digital("l_b")
+    r_ipt.b_button = _digital("r_b")
 
 
 def _get_poses(ovr_context: OVRContext) -> Generator[tuple[datetime.datetime, OVRTracker, Matrix], None, None]:
@@ -129,7 +191,7 @@ def _openvr_poll_thread_func(ovr_context: OVRContext):
             if recording_active:
                 record_buffer.append(pose_chunk)
 
-        #_get_input(ovr_context)
+        _get_input(ovr_context)
         #_handle_input(ovr_context)
 
 

@@ -98,6 +98,26 @@ class RecorderPanel(View3DPanel, bpy.types.Panel):
         layout.operator(ToggleCalibrationOperator.bl_idname, text=calibrate_btn_label)
         layout.label(text=calibrate_hint)
 
+        # Controller / finger input state
+        def draw_input_state(column, label, ipt):
+            box = column.box()
+            box.label(text=label)
+            box.prop(ipt, "joystick_position")
+            box.prop(ipt, "trigger_strength")
+            box.prop(ipt, "grip_strength")
+            box.prop(ipt, "thumb_strength")
+            box.prop(ipt, "index_strength")
+            box.prop(ipt, "middle_strength")
+            box.prop(ipt, "ring_strength")
+            box.prop(ipt, "pinky_strength")
+            row = box.row(align=True)
+            row.prop(ipt, "a_button")
+            row.prop(ipt, "b_button")
+
+        inputs_col = layout.column(align=True)
+        draw_input_state(inputs_col, "Left Controller Input", ovr_context.l_input)
+        draw_input_state(inputs_col, "Right Controller Input", ovr_context.r_input)
+
         # Recording
         layout.label(text="Recording")
 
