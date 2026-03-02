@@ -9,6 +9,7 @@ from .operators import (
     BuildArmatureOperator
 )
 from .properties import OVRContext
+from .tracking import get_skeletal_status
 
 
 class PANEL_UL_TrackerList(bpy.types.UIList):
@@ -125,6 +126,7 @@ class RecorderPanel(View3DPanel, bpy.types.Panel):
 
         # Skeletal finger debug (Knuckles)
         layout.label(text="Skeletal Fingers")
+        layout.label(text=f"Status: {get_skeletal_status()}")
 
         def draw_finger_block(block_layout, title: str, input_prop):
             box = block_layout.box()

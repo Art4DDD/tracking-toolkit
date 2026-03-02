@@ -26,6 +26,7 @@ action_sets = []
 action_handles = {}
 
 last_input_diag_time = 0.0
+skeletal_status = "Not initialized"
 
 FINGER_BONE_CHAINS = {
     "thumb": (2, 3, 4, 5),
@@ -37,6 +38,7 @@ FINGER_BONE_CHAINS = {
 
 
 def init_handles():
+    global skeletal_status
     vr_ipt = openvr.VRInput()
 
     def _get_action_set_handle(action_set_path: str):
@@ -72,6 +74,21 @@ def init_handles():
     if not action_set_handle:
         print("[OpenVR] Failed to get action set handle: /actions/default")
 
+    has_action_data = hasattr(vr_ipt, "getSkeletalActionData") or hasattr(vr_ipt, "GetSkeletalActionData")
+    has_summary = hasattr(vr_ipt, "getSkeletalSummaryData") or hasattr(vr_ipt, "GetSkeletalSummaryData")
+    has_bone_data = hasattr(vr_ipt, "getSkeletalBoneData") or hasattr(vr_ipt, "GetSkeletalBoneData")
+
+    if not has_action_data:
+        skeletal_status = "pyopenvr has no SkeletalActionData API (update pyopenvr build)"
+    elif not (has_summary or has_bone_data):
+        skeletal_status = "pyopenvr missing SkeletalSummaryData/BoneData API"
+    elif action_sets[0].ulActionSet == 0:
+        skeletal_status = "Action set '/actions/default' not found"
+    elif action_handles["l_skeleton"] in (None, invalid_handle) or action_handles["r_skeleton"] in (None, invalid_handle):
+        skeletal_status = "Skeleton action handle missing (check actions.json/bindings)"
+    else:
+        skeletal_status = "Skeletal API initialized"
+
     print("Initialized OpenVR skeletal action handles")
 
 
@@ -81,7 +98,9 @@ def _handle_input(ovr_context: OVRContext):
 
 
 def _get_input(ovr_context: OVRContext):
+    global skeletal_status
     if not (action_handles and action_sets):
+        skeletal_status = "Action handles not initialized"
         return
 
     vr_ipt = openvr.VRInput()
@@ -94,6 +113,7 @@ def _get_input(ovr_context: OVRContext):
         vr_ipt.updateActionState(action_sets)
     except Exception as e:
         print(f"[OpenVR] updateActionState failed: {e}")
+        skeletal_status = f"updateActionState failed: {e}"
         return
 
     def _calc_finger_curl(bone_transforms, chain: tuple[int, ...]) -> float:
@@ -212,6 +232,11 @@ def _get_input(ovr_context: OVRContext):
         r_ipt.middle_curl = r_skeletal["middle"]
         r_ipt.ring_curl = r_skeletal["ring"]
         r_ipt.pinky_curl = r_skeletal["pinky"]
+
+    if l_skeletal or r_skeletal:
+        skeletal_status = "Skeletal input active"
+    else:
+        skeletal_status = "Skeletal actions inactive (bindings/SteamVR)"
 
     # Lightweight diagnostics (once per ~2 seconds)
     global last_input_diag_time
@@ -487,6 +512,10 @@ def stop_preview():
 
     print("OpenVR Preview Stopped")
 
+
+
+def get_skeletal_status() -> str:
+    return skeletal_status
 
 def load_trackers(ovr_context: OVRContext):
     print("OpenVR Loading Trackers")
