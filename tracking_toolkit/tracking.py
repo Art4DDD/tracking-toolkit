@@ -25,6 +25,9 @@ recording_active = False
 
 action_sets = []
 action_handles = {}
+active_ovr_context = None
+last_new_tracker_check = datetime.datetime.min
+
 FINGER_CHANNELS = ("thumb_curl", "index_curl", "middle_curl", "ring_curl", "pinky_curl")
 
 FINGER_BONE_CHAINS = {
@@ -764,7 +767,16 @@ def _apply_poses():
 
 
 def _pose_vis_timer():
+    global active_ovr_context, last_new_tracker_check
+
     _apply_poses()
+
+    if active_ovr_context and getattr(active_ovr_context, "enabled", False):
+        now = datetime.datetime.now(datetime.timezone.utc)
+        if (now - last_new_tracker_check).total_seconds() >= 2.0:
+            _append_new_trackers_only(active_ovr_context)
+            last_new_tracker_check = now
+
     return 1.0 / 60  # 60hz
 
 
@@ -965,13 +977,15 @@ def stop_recording(ovr_context: OVRContext | None):
 
 
 def start_preview(ovr_context: OVRContext):
-    global polling_thread, stop_thread_flag
+    global polling_thread, stop_thread_flag, active_ovr_context, last_new_tracker_check
 
     if polling_thread and polling_thread.is_alive():
         stop_thread_flag.set()
         polling_thread.join()
 
     stop_thread_flag.clear()
+    active_ovr_context = ovr_context
+    last_new_tracker_check = datetime.datetime.min
     polling_thread = threading.Thread(target=lambda: _openvr_poll_thread_func(ovr_context))
     polling_thread.daemon = True  # Quit with Blender
     polling_thread.start()
@@ -983,7 +997,7 @@ def start_preview(ovr_context: OVRContext):
 
 
 def stop_preview():
-    global polling_thread, stop_thread_flag, preview_buffer
+    global polling_thread, stop_thread_flag, preview_buffer, active_ovr_context
 
     if bpy.app.timers.is_registered(_pose_vis_timer):
         bpy.app.timers.unregister(_pose_vis_timer)
@@ -996,10 +1010,44 @@ def stop_preview():
         preview_buffer.clear()
 
     polling_thread = None
+    active_ovr_context = None
     stop_thread_flag.clear()
 
     print("OpenVR Preview Stopped")
 
+
+
+def _append_new_trackers_only(ovr_context: OVRContext):
+    """Add only newly discovered devices; keep existing tracker entries untouched."""
+    system = openvr.VRSystem()
+    known_indices = {tracker.index for tracker in ovr_context.trackers}
+
+    for i in range(openvr.k_unMaxTrackedDeviceCount):
+        device_class = system.getTrackedDeviceClass(i)
+        if device_class == openvr.TrackedDeviceClass_Invalid or i in known_indices:
+            continue
+
+        tracker_serial = _safe_device_property(system, i, openvr.Prop_SerialNumber_String)
+        tracker_name = _resolve_tracker_name(system, i, tracker_serial)
+
+        existing_names = {t.name for t in ovr_context.trackers}
+        unique_name = tracker_name
+        suffix = 2
+        while unique_name in existing_names:
+            unique_name = f"{tracker_name} {suffix}"
+            suffix += 1
+
+        tracker = ovr_context.trackers.add()
+        tracker.name = unique_name
+        tracker.prev_name = unique_name
+        tracker.serial = tracker_serial
+        tracker.type = str(device_class)
+        tracker.index = i
+        tracker.connected = bool(system.isTrackedDeviceConnected(i))
+
+        debug_info = _collect_tracker_debug_info(system, i, device_class)
+        if debug_info:
+            print(f"[OpenVR Device] {_format_tracker_debug_info(debug_info)}")
 
 
 def load_trackers(ovr_context: OVRContext):
