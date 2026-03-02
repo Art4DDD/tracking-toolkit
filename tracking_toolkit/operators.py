@@ -488,10 +488,12 @@ class CreateRefsOperator(bpy.types.Operator):
                 return None
 
             render_models = openvr.VRRenderModels()
-            get_original_path = (
-                getattr(render_models, "getRenderModelOriginalPath", None)
-                or getattr(render_models, "GetRenderModelOriginalPath", None)
-            )
+            get_original_path = getattr(render_models, "GetRenderModelOriginalPath", None)
+            method_name = "GetRenderModelOriginalPath"
+            if not get_original_path:
+                get_original_path = getattr(render_models, "getRenderModelOriginalPath", None)
+                method_name = "getRenderModelOriginalPath"
+
             if not get_original_path:
                 return None
 
@@ -507,6 +509,11 @@ class CreateRefsOperator(bpy.types.Operator):
 
             result = get_original_path(render_model_name)
             original_path = _extract_path(result)
+            if original_path:
+                print(
+                    f"[OpenVR OriginalPath] device={tracker.index} model={render_model_name} "
+                    f"path={original_path} method={method_name}"
+                )
 
             # SteamVR may resolve final visuals through component render models.
             get_component_count = (
