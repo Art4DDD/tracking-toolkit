@@ -416,45 +416,7 @@ class CreateRefsOperator(bpy.types.Operator):
             except Exception:
                 return ""
 
-        def _get_prop_int(index: int, prop: int) -> int | None:
-            try:
-                return system.getInt32TrackedDeviceProperty(index, prop)
-            except Exception:
-                return None
-
-        def _resolve_openvr_model_obj_path(tracker: OVRTracker) -> Path | None:
-            render_models = openvr.VRRenderModels()
-            get_original_path = getattr(render_models, "GetRenderModelOriginalPath", None)
-            if not get_original_path:
-                get_original_path = getattr(render_models, "getRenderModelOriginalPath", None)
-            if not get_original_path:
-                return None
-
-            def _extract_path(result) -> str:
-                if isinstance(result, tuple):
-                    if result and isinstance(result[0], str):
-                        return result[0].strip()
-                    if len(result) > 1 and isinstance(result[1], str):
-                        return result[1].strip()
-                if isinstance(result, str):
-                    return result.strip()
-                return ""
-
-            def _resolve_from_token(token: str) -> Path | None:
-                token = (token or "").strip()
-                if not token:
-                    return None
-                try:
-                    result = get_original_path(token)
-                except Exception:
-                    return None
-                resolved_path = _extract_path(result)
-                if not resolved_path:
-                    return None
-                path_obj = Path(resolved_path)
-                print(f"[OpenVR OriginalPath] {path_obj}")
-                return path_obj
-
+        def _resolve_openvr_model_token(tracker: OVRTracker) -> str | None:
             token_candidates = [
                 _get_prop(tracker.index, openvr.Prop_RenderModelName_String),
                 _get_prop(tracker.index, getattr(openvr, "Prop_ControllerType_String", -1)),
@@ -463,40 +425,119 @@ class CreateRefsOperator(bpy.types.Operator):
             ]
 
             for token in token_candidates:
-                resolved = _resolve_from_token(token)
-                if resolved:
-                    return resolved
-
+                token = (token or "").strip()
+                if token:
+                    return token
             return None
 
+        def _get_or_import_model(render_model_token: str) -> bpy.types.Object | None:
+            token = (render_model_token or "").strip()
+            if not token:
+                return None
 
-
-        def _resolve_model_obj_path(tracker: OVRTracker) -> Path | None:
-            return _resolve_openvr_model_obj_path(tracker)
-
-        def _get_or_import_model(path: Path) -> bpy.types.Object | None:
-            key = str(path.resolve())
-            cached = model_templates.get(key)
+            cached = model_templates.get(token)
             if cached and cached.name in bpy.data.objects:
                 return cached
 
+            render_models = openvr.VRRenderModels()
+            load_model = (
+                getattr(render_models, "LoadRenderModel_Async", None)
+                or getattr(render_models, "loadRenderModel_Async", None)
+            )
+            free_model = (
+                getattr(render_models, "FreeRenderModel", None)
+                or getattr(render_models, "freeRenderModel", None)
+            )
+            if not load_model:
+                return None
+
             try:
-                bpy.ops.wm.obj_import(filepath=str(path))
-            except RuntimeError:
+                result = load_model(token)
+            except Exception:
                 return None
 
-            imported = bpy.context.object
-            if not imported:
+            if isinstance(result, tuple):
+                render_model = next((item for item in result if hasattr(item, "unVertexCount") or hasattr(item, "rVertexData")), None)
+            else:
+                render_model = result
+
+            if not render_model:
                 return None
 
+            vertex_count = int(getattr(render_model, "unVertexCount", 0) or 0)
+            triangle_count = int(getattr(render_model, "unTriangleCount", 0) or 0)
+            if vertex_count <= 0 or triangle_count <= 0:
+                try:
+                    if free_model:
+                        free_model(render_model)
+                except Exception:
+                    pass
+                return None
+
+            vertices = []
+            vert_data = getattr(render_model, "rVertexData", None)
+            if vert_data is None:
+                try:
+                    if free_model:
+                        free_model(render_model)
+                except Exception:
+                    pass
+                return None
+            for i in range(vertex_count):
+                v = vert_data[i]
+                vec = getattr(v, "vPosition", None)
+                if vec is None:
+                    try:
+                        vec = v[0]
+                    except Exception:
+                        vec = None
+                if vec is None:
+                    vertices.append((0.0, 0.0, 0.0))
+                else:
+                    vertices.append((float(getattr(vec, "v", [0.0, 0.0, 0.0])[0]), float(getattr(vec, "v", [0.0, 0.0, 0.0])[1]), float(getattr(vec, "v", [0.0, 0.0, 0.0])[2])))
+
+            indices = getattr(render_model, "rIndexData", None)
+            if indices is None:
+                try:
+                    if free_model:
+                        free_model(render_model)
+                except Exception:
+                    pass
+                return None
+            faces = []
+            for tri in range(triangle_count):
+                i0 = int(indices[tri * 3 + 0])
+                i1 = int(indices[tri * 3 + 1])
+                i2 = int(indices[tri * 3 + 2])
+                if i0 < vertex_count and i1 < vertex_count and i2 < vertex_count:
+                    faces.append((i0, i1, i2))
+
+            try:
+                if free_model:
+                    free_model(render_model)
+            except Exception:
+                pass
+
+            if not vertices or not faces:
+                return None
+
+            safe_token = token.replace("/", "_").replace("\\", "_")
+            mesh = bpy.data.meshes.new(f"TTK_RenderModel_{safe_token}")
+            mesh.from_pydata(vertices, [], faces)
+            mesh.validate(clean_customdata=False)
+            mesh.update()
+
+            imported = bpy.data.objects.new(f"TTK_Template_{safe_token}", mesh)
+            bpy.context.scene.collection.objects.link(imported)
             imported.location = (0, 0, 0)
             imported.rotation_euler = (0, 0, 0)
             imported.scale = (1, 1, 1)
-            imported.name = f"TTK_Template_{path.stem}"
             imported.hide_render = True
+            print(f"[OpenVR RenderModel] {token}")
 
-            model_templates[key] = imported
+            model_templates[token] = imported
             return imported
+
 
         load_trackers(ovr_context)
 
@@ -512,8 +553,8 @@ class CreateRefsOperator(bpy.types.Operator):
 
             print(">", tracker_name)
 
-            model_path = _resolve_model_obj_path(tracker)
-            model = _get_or_import_model(model_path) if model_path else None
+            model_token = _resolve_openvr_model_token(tracker)
+            model = _get_or_import_model(model_token) if model_token else None
 
             if not model:
                 print(f"Could not resolve model for {tracker_name}; skipping")
