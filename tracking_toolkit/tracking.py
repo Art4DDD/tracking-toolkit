@@ -25,6 +25,8 @@ recording_active = False
 
 action_sets = []
 action_handles = {}
+active_ovr_context = None
+last_tracker_append_check = datetime.datetime.min
 
 FINGER_CHANNELS = ("thumb_curl", "index_curl", "middle_curl", "ring_curl", "pinky_curl")
 
@@ -765,7 +767,17 @@ def _apply_poses():
 
 
 def _pose_vis_timer():
+    global active_ovr_context, last_tracker_append_check
+
     _apply_poses()
+
+    # Auto-append newly connected devices while VR is running (SteamVR-like behavior).
+    if active_ovr_context and getattr(active_ovr_context, "enabled", False):
+        now = datetime.datetime.now(datetime.timezone.utc)
+        if (now - last_tracker_append_check).total_seconds() >= 2.0:
+            append_trackers(active_ovr_context)
+            last_tracker_append_check = now
+
     return 1.0 / 60  # 60hz
 
 
@@ -966,13 +978,15 @@ def stop_recording(ovr_context: OVRContext | None):
 
 
 def start_preview(ovr_context: OVRContext):
-    global polling_thread, stop_thread_flag
+    global polling_thread, stop_thread_flag, active_ovr_context, last_tracker_append_check
 
     if polling_thread and polling_thread.is_alive():
         stop_thread_flag.set()
         polling_thread.join()
 
     stop_thread_flag.clear()
+    active_ovr_context = ovr_context
+    last_tracker_append_check = datetime.datetime.min
     polling_thread = threading.Thread(target=lambda: _openvr_poll_thread_func(ovr_context))
     polling_thread.daemon = True  # Quit with Blender
     polling_thread.start()
@@ -984,7 +998,7 @@ def start_preview(ovr_context: OVRContext):
 
 
 def stop_preview():
-    global polling_thread, stop_thread_flag, preview_buffer
+    global polling_thread, stop_thread_flag, preview_buffer, active_ovr_context
 
     if bpy.app.timers.is_registered(_pose_vis_timer):
         bpy.app.timers.unregister(_pose_vis_timer)
@@ -997,6 +1011,7 @@ def stop_preview():
         preview_buffer.clear()
 
     polling_thread = None
+    active_ovr_context = None
     stop_thread_flag.clear()
 
     print("OpenVR Preview Stopped")
