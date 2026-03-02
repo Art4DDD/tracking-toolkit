@@ -99,44 +99,29 @@ def _safe_device_property(system, device_index: int, property_id: int) -> str:
         return ""
 
 
-def _get_controller_hand_name(system, device_index: int) -> str:
-    try:
-        role_hint = system.getInt32TrackedDeviceProperty(device_index, openvr.Prop_ControllerRoleHint_Int32)
-    except Exception:
-        return ""
-
-    role_map = {
-        int(getattr(openvr, "TrackedControllerRole_LeftHand", -1)): "Left Controller",
-        int(getattr(openvr, "TrackedControllerRole_RightHand", -1)): "Right Controller",
-    }
-    return role_map.get(int(role_hint), "")
+def _normalize_tracker_name(raw_name: str) -> str:
+    normalized = " ".join((raw_name or "").replace("_", " ").replace("-", " ").split())
+    return normalized.strip()
 
 
-def _resolve_tracker_name(system, device_index: int, device_class: int, serial: str) -> str:
-    if not serial:
-        return f"Device {device_index}"
+def _resolve_tracker_name(system, device_index: int, serial: str) -> str:
+    openvr_name_candidates = [
+        _safe_device_property(system, device_index, openvr.Prop_RenderModelName_String),
+        _safe_device_property(system, device_index, openvr.Prop_ModelNumber_String),
+        _safe_device_property(system, device_index, openvr.Prop_ControllerType_String),
+        _safe_device_property(system, device_index, openvr.Prop_RegisteredDeviceType_String),
+    ]
 
-    if not serial.upper().startswith("LHR-FFFFFF"):
-        return serial
+    for candidate in openvr_name_candidates:
+        normalized = _normalize_tracker_name(candidate)
+        if normalized:
+            return normalized
 
-    render_model_name = _safe_device_property(system, device_index, openvr.Prop_RenderModelName_String)
-    if render_model_name:
-        return render_model_name
+    normalized_serial = _normalize_tracker_name(serial)
+    if normalized_serial:
+        return normalized_serial
 
-    if device_class == openvr.TrackedDeviceClass_HMD:
-        return "HMD"
-
-    if device_class == openvr.TrackedDeviceClass_Controller:
-        hand_name = _get_controller_hand_name(system, device_index)
-        if hand_name:
-            return hand_name
-        return "Controller"
-
-    model_name = _safe_device_property(system, device_index, openvr.Prop_ModelNumber_String)
-    if model_name:
-        return model_name
-
-    return serial
+    return f"Device {device_index}"
 
 
 def init_handles():
@@ -769,11 +754,18 @@ def load_trackers(ovr_context: OVRContext):
 
         device_class = system.getTrackedDeviceClass(i)
         tracker_serial = _safe_device_property(system, i, openvr.Prop_SerialNumber_String)
-        tracker_name = _resolve_tracker_name(system, i, device_class, tracker_serial)
+        tracker_name = _resolve_tracker_name(system, i, tracker_serial)
+
+        existing_names = {t.name for t in ovr_context.trackers}
+        unique_name = tracker_name
+        suffix = 2
+        while unique_name in existing_names:
+            unique_name = f"{tracker_name} {suffix}"
+            suffix += 1
 
         tracker = ovr_context.trackers.add()
-        tracker.name = tracker_name
-        tracker.prev_name = tracker_name
+        tracker.name = unique_name
+        tracker.prev_name = unique_name
         tracker.serial = tracker_serial
         tracker.type = str(device_class)
         tracker.index = i

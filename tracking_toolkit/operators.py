@@ -481,7 +481,23 @@ class CreateRefsOperator(bpy.types.Operator):
                 return "right"
             return None
 
+        def _resolve_openvr_model_obj_path(tracker: OVRTracker) -> Path | None:
+            render_model_name = _get_prop(tracker.index, openvr.Prop_RenderModelName_String)
+            resource_root = _get_prop(tracker.index, openvr.Prop_ResourceRoot_String)
+            if not render_model_name or not resource_root:
+                return None
+
+            root_path = Path(resource_root)
+            model_path = root_path / "rendermodels" / render_model_name / f"{render_model_name}.obj"
+            if model_path.exists():
+                return model_path
+            return None
+
         def _resolve_model_obj_path(tracker: OVRTracker) -> Path | None:
+            direct_openvr_model = _resolve_openvr_model_obj_path(tracker)
+            if direct_openvr_model:
+                return direct_openvr_model
+
             render_model_name = _get_prop(tracker.index, openvr.Prop_RenderModelName_String).lower()
             manufacturer = _get_prop(tracker.index, openvr.Prop_ManufacturerName_String).lower()
             model_number = _get_prop(tracker.index, openvr.Prop_ModelNumber_String).lower()
@@ -492,11 +508,6 @@ class CreateRefsOperator(bpy.types.Operator):
 
             if render_model_name:
                 keys.append(render_model_name)
-
-                if render_model_name.endswith("_left"):
-                    keys.append("pico_controller_left")
-                elif render_model_name.endswith("_right"):
-                    keys.append("pico_controller_right")
 
             if "index" in model_number or "knuckles" in controller_type or "knuckles" in model_number:
                 if controller_side:
