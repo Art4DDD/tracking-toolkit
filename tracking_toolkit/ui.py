@@ -176,8 +176,6 @@ class RecorderPanel(View3DPanel, bpy.types.Panel):
                     tracker_obj = tracker.target.object or bpy.data.objects.get(tracker.name)
                     if tracker.type != controller_type or not tracker_obj:
                         continue
-                    if tracker.name.upper().startswith("LHR-FFFFFF"):
-                        continue
                     try:
                         role = system.getInt32TrackedDeviceProperty(tracker.index, role_prop)
                     except Exception:
@@ -191,9 +189,9 @@ class RecorderPanel(View3DPanel, bpy.types.Panel):
                 pass
 
             if not left_obj:
-                left_obj = next(((t.target.object or bpy.data.objects.get(t.name)) for t in ovr_context.trackers if t.type == controller_type and "left" in t.name.lower() and not t.name.upper().startswith("LHR-FFFFFF")), None)
+                left_obj = next(((t.target.object or bpy.data.objects.get(t.name)) for t in ovr_context.trackers if t.type == controller_type and "left" in t.name.lower()), None)
             if not right_obj:
-                right_obj = next(((t.target.object or bpy.data.objects.get(t.name)) for t in ovr_context.trackers if t.type == controller_type and "right" in t.name.lower() and not t.name.upper().startswith("LHR-FFFFFF")), None)
+                right_obj = next(((t.target.object or bpy.data.objects.get(t.name)) for t in ovr_context.trackers if t.type == controller_type and "right" in t.name.lower()), None)
 
             return left_obj, right_obj
 
