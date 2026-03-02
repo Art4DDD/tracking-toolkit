@@ -485,10 +485,12 @@ class CreateRefsOperator(bpy.types.Operator):
             render_model_name = _get_prop(tracker.index, openvr.Prop_RenderModelName_String)
             resource_root = _get_prop(tracker.index, openvr.Prop_ResourceRoot_String)
             if not render_model_name or not resource_root:
+                print(f"[OpenVR ModelPath] device={tracker.index} serial={tracker.serial} path=<unavailable>")
                 return None
 
             root_path = Path(resource_root)
             model_path = root_path / "rendermodels" / render_model_name / f"{render_model_name}.obj"
+            print(f"[OpenVR ModelPath] device={tracker.index} serial={tracker.serial} path={model_path} exists={model_path.exists()}")
             if model_path.exists():
                 return model_path
             return None
@@ -500,7 +502,6 @@ class CreateRefsOperator(bpy.types.Operator):
 
             direct_openvr_model = _resolve_openvr_model_obj_path(tracker)
             if direct_openvr_model:
-                print(f"[OpenVR ModelPath] device={tracker.index} path={direct_openvr_model}")
                 return direct_openvr_model
 
             render_model_name = render_model_raw.lower()
