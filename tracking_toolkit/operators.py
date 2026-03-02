@@ -1,12 +1,10 @@
-import json
 import bpy
 import openvr
 from pathlib import Path
 from mathutils import Vector
 
-from .properties import Preferences, OVRTransform, OVRContext, OVRTracker
+from .properties import OVRTransform, OVRContext, OVRTracker
 from .tracking import load_trackers, start_recording, stop_recording, start_preview, stop_preview, init_handles
-from .. import __package__ as base_package
 
 
 class BuildArmatureOperator(bpy.types.Operator):
@@ -409,10 +407,6 @@ class CreateRefsOperator(bpy.types.Operator):
 
         # Import models
 
-        # Get model paths from preferences
-        preferences: Preferences | None = context.preferences.addons[base_package].preferences
-        install_dir = Path(preferences.steamvr_installation_path)
-
         system = openvr.VRSystem()
         model_templates: dict[str, bpy.types.Object] = {}
 
@@ -429,95 +423,51 @@ class CreateRefsOperator(bpy.types.Operator):
                 return None
 
         def _resolve_openvr_model_obj_path(tracker: OVRTracker) -> Path | None:
-            def _resolve_obj_from_token(token: str, driver_name: str | None) -> Path | None:
-                token_clean = (token or "").strip().strip("/")
-                if not token_clean:
-                    return None
-
-                token_name = token_clean.split("/")[-1]
-                roots: list[Path] = []
-                if driver_name:
-                    roots.append(install_dir / "drivers" / driver_name / "resources" / "rendermodels")
-                roots.append(install_dir / "resources" / "rendermodels")
-
-                for root in roots:
-                    if not root.exists():
-                        continue
-
-                    # Common layout: rendermodels/<token>/<token>.obj
-                    candidate = root / token_name / f"{token_name}.obj"
-                    if candidate.exists():
-                        print(f"[OpenVR OriginalPath] {candidate}")
-                        return candidate
-
-                    # Token may already contain subdirs
-                    token_path = root / token_clean
-                    if token_path.suffix.lower() == ".obj" and token_path.exists():
-                        print(f"[OpenVR OriginalPath] {token_path}")
-                        return token_path
-
-                    candidate = token_path / f"{token_path.name}.obj"
-                    if candidate.exists():
-                        print(f"[OpenVR OriginalPath] {candidate}")
-                        return candidate
-
+            render_models = openvr.VRRenderModels()
+            get_original_path = getattr(render_models, "GetRenderModelOriginalPath", None)
+            if not get_original_path:
+                get_original_path = getattr(render_models, "getRenderModelOriginalPath", None)
+            if not get_original_path:
                 return None
 
-            def _resolve_from_input_profile(input_profile_path: str) -> Path | None:
-                if not input_profile_path:
+            def _extract_path(result) -> str:
+                if isinstance(result, tuple):
+                    if result and isinstance(result[0], str):
+                        return result[0].strip()
+                    if len(result) > 1 and isinstance(result[1], str):
+                        return result[1].strip()
+                if isinstance(result, str):
+                    return result.strip()
+                return ""
+
+            def _resolve_from_token(token: str) -> Path | None:
+                token = (token or "").strip()
+                if not token:
                     return None
-
-                profile_rel_path = input_profile_path.strip().lstrip("/")
-                if not profile_rel_path:
-                    return None
-
-                driver_name: str | None = None
-                if profile_rel_path.startswith("{"):
-                    end_idx = profile_rel_path.find("}")
-                    if end_idx <= 1:
-                        return None
-                    driver_name = profile_rel_path[1:end_idx]
-                    profile_suffix = profile_rel_path[end_idx + 1:].lstrip("/")
-                    profile_path = install_dir / "drivers" / driver_name / "resources" / profile_suffix
-                else:
-                    profile_path = install_dir / profile_rel_path
-                    if not profile_path.exists():
-                        profile_path = install_dir / "resources" / profile_rel_path
-
-                if not profile_path.exists():
-                    return None
-
                 try:
-                    profile_data = json.loads(profile_path.read_text(encoding="utf-8"))
+                    result = get_original_path(token)
                 except Exception:
                     return None
+                resolved_path = _extract_path(result)
+                if not resolved_path:
+                    return None
+                path_obj = Path(resolved_path)
+                print(f"[OpenVR OriginalPath] {path_obj}")
+                return path_obj
 
-                candidates: list[str] = []
-                render_model = profile_data.get("render_model")
-                if isinstance(render_model, str):
-                    candidates.append(render_model)
+            token_candidates = [
+                _get_prop(tracker.index, openvr.Prop_RenderModelName_String),
+                _get_prop(tracker.index, getattr(openvr, "Prop_ControllerType_String", -1)),
+                _get_prop(tracker.index, getattr(openvr, "Prop_RegisteredDeviceType_String", -1)),
+                _get_prop(tracker.index, getattr(openvr, "Prop_ModelNumber_String", -1)),
+            ]
 
-                hand_render_models = profile_data.get("hand_render_model")
-                if isinstance(hand_render_models, dict):
-                    role_prop = getattr(openvr, "Prop_ControllerRoleHint_Int32", None)
-                    role = _get_prop_int(tracker.index, role_prop) if role_prop is not None else None
-                    left_role = getattr(openvr, "TrackedControllerRole_LeftHand", 1)
-                    right_role = getattr(openvr, "TrackedControllerRole_RightHand", 2)
-                    if role == left_role and isinstance(hand_render_models.get("left"), str):
-                        candidates.append(hand_render_models["left"])
-                    if role == right_role and isinstance(hand_render_models.get("right"), str):
-                        candidates.append(hand_render_models["right"])
+            for token in token_candidates:
+                resolved = _resolve_from_token(token)
+                if resolved:
+                    return resolved
 
-                for token in candidates:
-                    resolved = _resolve_obj_from_token(token, driver_name)
-                    if resolved:
-                        return resolved
-
-                return None
-
-            input_profile_prop = getattr(openvr, "Prop_InputProfilePath_String", None)
-            input_profile_path = _get_prop(tracker.index, input_profile_prop) if input_profile_prop is not None else ""
-            return _resolve_from_input_profile(input_profile_path)
+            return None
 
 
 
