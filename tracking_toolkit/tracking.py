@@ -109,15 +109,48 @@ def _get_input(ovr_context: OVRContext):
         if action is None:
             return None
 
-        if not hasattr(vr_ipt, "getSkeletalActionData") or not hasattr(vr_ipt, "getSkeletalBoneData"):
+        get_action_data_fn = getattr(vr_ipt, "getSkeletalActionData", None) or getattr(vr_ipt, "GetSkeletalActionData", None)
+        if not get_action_data_fn:
             return None
 
         try:
-            action_data = vr_ipt.getSkeletalActionData(action)
+            action_data = get_action_data_fn(action)
         except Exception:
             return None
 
         if not getattr(action_data, "bActive", False):
+            return None
+
+        # 1) Preferred path: skeletal summary already contains per-finger curls.
+        get_summary_fn = getattr(vr_ipt, "getSkeletalSummaryData", None) or getattr(vr_ipt, "GetSkeletalSummaryData", None)
+        if get_summary_fn:
+            summary = None
+            try:
+                summary = get_summary_fn(action)
+            except TypeError:
+                summary_data_t = getattr(openvr, "InputSkeletalSummaryData_t", None)
+                if summary_data_t:
+                    try:
+                        summary = get_summary_fn(action, summary_data_t())
+                    except Exception:
+                        summary = None
+            except Exception:
+                summary = None
+
+            if summary is not None:
+                curls = getattr(summary, "flFingerCurl", None) or getattr(summary, "fingerCurl", None)
+                if curls and len(curls) >= 5:
+                    return {
+                        "thumb": float(curls[0]),
+                        "index": float(curls[1]),
+                        "middle": float(curls[2]),
+                        "ring": float(curls[3]),
+                        "pinky": float(curls[4]),
+                    }
+
+        # 2) Fallback path: estimate curls from skeletal bone transforms.
+        get_bone_data_fn = getattr(vr_ipt, "getSkeletalBoneData", None) or getattr(vr_ipt, "GetSkeletalBoneData", None)
+        if not get_bone_data_fn:
             return None
 
         transform_space = getattr(openvr, "VRSkeletalTransformSpace_Model", 0)
@@ -125,10 +158,10 @@ def _get_input(ovr_context: OVRContext):
         bone_count = getattr(openvr, "k_unSkeletonBoneCount", 31)
 
         try:
-            bone_transforms = vr_ipt.getSkeletalBoneData(action, transform_space, motion_range)
+            bone_transforms = get_bone_data_fn(action, transform_space, motion_range)
         except TypeError:
             try:
-                bone_transforms = vr_ipt.getSkeletalBoneData(action, transform_space, motion_range, bone_count)
+                bone_transforms = get_bone_data_fn(action, transform_space, motion_range, bone_count)
             except Exception:
                 return None
         except Exception:
