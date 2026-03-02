@@ -499,6 +499,62 @@ class CreateRefsOperator(bpy.types.Operator):
                 _add("lh_basestation_valve_gen2")
                 _add("lh_basestation_vive")
 
+            # Last-resort token discovery: enumerate runtime render-model names.
+            get_count = (
+                getattr(render_models, "GetRenderModelCount", None)
+                or getattr(render_models, "getRenderModelCount", None)
+            )
+            get_name = (
+                getattr(render_models, "GetRenderModelName", None)
+                or getattr(render_models, "getRenderModelName", None)
+            )
+            if get_count and get_name:
+                try:
+                    count = int(get_count())
+                except Exception:
+                    count = 0
+
+                hints = " ".join([
+                    _get_prop(tracker.index, getattr(openvr, "Prop_TrackingSystemName_String", -1)).lower(),
+                    _get_prop(tracker.index, getattr(openvr, "Prop_ManufacturerName_String", -1)).lower(),
+                    _get_prop(tracker.index, getattr(openvr, "Prop_ControllerType_String", -1)).lower(),
+                    _get_prop(tracker.index, getattr(openvr, "Prop_RegisteredDeviceType_String", -1)).lower(),
+                    _get_prop(tracker.index, getattr(openvr, "Prop_ModelNumber_String", -1)).lower(),
+                ])
+
+                preferred: list[str] = []
+                fallback: list[str] = []
+                for idx in range(max(count, 0)):
+                    try:
+                        n = get_name(idx)
+                    except Exception:
+                        continue
+                    if isinstance(n, tuple):
+                        name = next((item for item in n if isinstance(item, str)), "")
+                    else:
+                        name = n if isinstance(n, str) else ""
+                    name = name.strip()
+                    if not name:
+                        continue
+
+                    lname = name.lower()
+                    score = 0
+                    for hint in ["pico", "index", "knuckles", "vive", "tundra", "tracker", "controller", "hmd", "base", "lighthouse", "valve", "htc"]:
+                        if hint in hints and hint in lname:
+                            score += 1
+                    if role == left_role and ("left" in lname or "_l" in lname):
+                        score += 2
+                    if role == right_role and ("right" in lname or "_r" in lname):
+                        score += 2
+
+                    if score > 0:
+                        preferred.append(name)
+                    else:
+                        fallback.append(name)
+
+                for name in preferred + fallback:
+                    _add(name)
+
             return candidates
 
 
@@ -648,6 +704,7 @@ class CreateRefsOperator(bpy.types.Operator):
 
             model = None
             for model_token in _resolve_openvr_model_tokens(tracker):
+                print(f"[OpenVR TokenTry] {model_token}")
                 model = _get_or_import_model(model_token)
                 if model:
                     break
