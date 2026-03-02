@@ -119,6 +119,10 @@ def _resolve_tracker_name(system, device_index: int, device_class: int, serial: 
     if not serial.upper().startswith("LHR-FFFFFF"):
         return serial
 
+    render_model_name = _safe_device_property(system, device_index, openvr.Prop_RenderModelName_String)
+    if render_model_name:
+        return render_model_name
+
     if device_class == openvr.TrackedDeviceClass_HMD:
         return "HMD"
 
@@ -389,9 +393,6 @@ def _resolve_controller_targets(ovr_context: OVRContext) -> dict[str, bpy.types.
     for tracker in ovr_context.trackers:
         if tracker.type != str(openvr.TrackedDeviceClass_Controller):
             continue
-        if _is_virtual_lhr_controller(tracker):
-            continue
-
         target_obj = _get_tracker_live_object(tracker)
         if not target_obj:
             continue
