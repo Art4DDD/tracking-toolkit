@@ -16,8 +16,10 @@ pose_queue = queue.Queue()
 polling_thread = None
 stop_thread_flag = threading.Event()
 
-data_buffer = []
+preview_buffer = []
+record_buffer = []
 buffer_lock = threading.Lock()
+recording_active = False
 
 action_sets = []
 action_handles = {}
@@ -111,7 +113,7 @@ def _get_poses(ovr_context: OVRContext) -> Generator[tuple[datetime.datetime, OV
 
 
 def _openvr_poll_thread_func(ovr_context: OVRContext):
-    global pose_queue, stop_thread_flag, data_buffer, buffer_lock
+    global pose_queue, stop_thread_flag, preview_buffer, record_buffer, buffer_lock, recording_active
 
     while not stop_thread_flag.is_set():
         pose_chunk = []
@@ -119,34 +121,39 @@ def _openvr_poll_thread_func(ovr_context: OVRContext):
             pose_chunk.append(pose_data)
 
         with buffer_lock:
-            data_buffer.append(pose_chunk)
+            preview_buffer.append(pose_chunk)
+            if len(preview_buffer) > 2:
+                preview_buffer.pop(0)
+
+            if recording_active:
+                record_buffer.append(pose_chunk)
 
         #_get_input(ovr_context)
         #_handle_input(ovr_context)
 
 
 def _clear_buffer():
-    global data_buffer, buffer_lock
+    global record_buffer, buffer_lock
     with buffer_lock:
-        data_buffer.clear()
+        record_buffer.clear()
 
 
 def _get_buffer() -> list[list[tuple[datetime.datetime, OVRTracker, Matrix]]]:
-    global data_buffer, buffer_lock
+    global record_buffer, buffer_lock
 
     with buffer_lock:
-        buffer_copy = data_buffer.copy()
+        buffer_copy = record_buffer.copy()
 
     return buffer_copy
 
 
 def _get_latest_poses() -> list[tuple[datetime.datetime, OVRTracker, Matrix]] | None:
-    global data_buffer, buffer_lock
+    global preview_buffer, buffer_lock
     with buffer_lock:
-        if len(data_buffer) == 0:
+        if len(preview_buffer) == 0:
             return None
 
-    return data_buffer[-1]
+        return preview_buffer[-1]
 
 
 def _apply_poses():
@@ -294,12 +301,18 @@ def _insert_action(ovr_context: OVRContext):
 
 
 def start_recording():
+    global recording_active
+
     _clear_buffer()
+    recording_active = True
 
     print("OpenVR Recording Started")
 
 
 def stop_recording(ovr_context: OVRContext | None):
+    global recording_active
+
+    recording_active = False
     stop_preview()
     _insert_action(ovr_context)
     _clear_buffer()
@@ -309,7 +322,11 @@ def stop_recording(ovr_context: OVRContext | None):
 
 
 def start_preview(ovr_context: OVRContext):
-    global polling_thread, stop_thread_flag, data_buffer, buffer_lock
+    global polling_thread, stop_thread_flag
+
+    if polling_thread and polling_thread.is_alive():
+        stop_thread_flag.set()
+        polling_thread.join()
 
     stop_thread_flag.clear()
     polling_thread = threading.Thread(target=lambda: _openvr_poll_thread_func(ovr_context))
@@ -323,7 +340,7 @@ def start_preview(ovr_context: OVRContext):
 
 
 def stop_preview():
-    global polling_thread, stop_thread_flag
+    global polling_thread, stop_thread_flag, preview_buffer
 
     if bpy.app.timers.is_registered(_pose_vis_timer):
         bpy.app.timers.unregister(_pose_vis_timer)
@@ -331,6 +348,9 @@ def stop_preview():
     if polling_thread and polling_thread.is_alive():
         stop_thread_flag.set()
         polling_thread.join()
+
+    with buffer_lock:
+        preview_buffer.clear()
 
     polling_thread = None
     stop_thread_flag.clear()
