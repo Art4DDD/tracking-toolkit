@@ -1,4 +1,5 @@
 import datetime
+import collections
 import queue
 import threading
 from typing import Generator
@@ -16,11 +17,13 @@ pose_queue = queue.Queue()
 polling_thread = None
 stop_thread_flag = threading.Event()
 
-data_buffer = []
+data_buffer = collections.deque(maxlen=8192)
 buffer_lock = threading.Lock()
 
 action_sets = []
 action_handles = {}
+
+TRACKING_TO_WORLD = bpy_extras.io_utils.axis_conversion("Z", "Y", "Y", "Z").to_4x4()
 
 
 def init_handles():
@@ -87,10 +90,16 @@ def _get_input(ovr_context: OVRContext):
     r_ipt.b_button = vr_ipt.getDigitalActionData(action_handles["r_b"], 0).bState
 
 
-def _get_poses(ovr_context: OVRContext) -> Generator[tuple[datetime.datetime, OVRTracker, Matrix], None, None]:
-    system = openvr.VRSystem()
-    poses, _ = openvr.VRCompositor().waitGetPoses([], None)
+def _get_poses(
+    ovr_context: OVRContext,
+    system,
+    compositor
+) -> Generator[tuple[datetime.datetime, OVRTracker, Matrix], None, None]:
+    poses, _ = compositor.waitGetPoses([], None)
     time = datetime.datetime.now()
+    root = bpy.data.objects.get("OVR Root")
+    root_scale = root.scale.length if root else 1.0
+    root_scale_matrix = Matrix.Scale(root_scale, 4)
 
     for tracker in ovr_context.trackers:
         if not bool(system.isTrackedDeviceConnected(tracker.index)):
@@ -99,23 +108,19 @@ def _get_poses(ovr_context: OVRContext) -> Generator[tuple[datetime.datetime, OV
         absolute_pose = poses[tracker.index].mDeviceToAbsoluteTracking
 
         mat = Matrix([list(absolute_pose[0]), list(absolute_pose[1]), list(absolute_pose[2]), [0, 0, 0, 1]])
-        mat_world = bpy_extras.io_utils.axis_conversion("Z", "Y", "Y", "Z").to_4x4()
-        mat_world = mat_world @ mat
-
-        # Apply scale
-        root = bpy.data.objects.get("OVR Root")
-        if root:
-            mat_world = mat_world @ Matrix.Scale(root.scale.length, 4)
+        mat_world = TRACKING_TO_WORLD @ mat @ root_scale_matrix
 
         yield time, tracker, mat_world
 
 
 def _openvr_poll_thread_func(ovr_context: OVRContext):
     global pose_queue, stop_thread_flag, data_buffer, buffer_lock
+    system = openvr.VRSystem()
+    compositor = openvr.VRCompositor()
 
     while not stop_thread_flag.is_set():
         pose_chunk = []
-        for pose_data in _get_poses(ovr_context):
+        for pose_data in _get_poses(ovr_context, system, compositor):
             pose_chunk.append(pose_data)
 
         with buffer_lock:
@@ -135,7 +140,7 @@ def _get_buffer() -> list[list[tuple[datetime.datetime, OVRTracker, Matrix]]]:
     global data_buffer, buffer_lock
 
     with buffer_lock:
-        buffer_copy = data_buffer.copy()
+        buffer_copy = list(data_buffer)
 
     return buffer_copy
 
@@ -146,20 +151,23 @@ def _get_latest_poses() -> list[tuple[datetime.datetime, OVRTracker, Matrix]] | 
         if len(data_buffer) == 0:
             return None
 
-    return data_buffer[-1]
+        latest = data_buffer[-1]
+
+    return latest
 
 
 def _apply_poses():
-    # Don't preview when playing, since a previous recording may interfere
-    if bpy.context.screen.is_animation_playing:
-        return
-
     pose_data = _get_latest_poses()
     if not pose_data:
         return
 
+    tracker_objects = {
+        tracker.name: bpy.data.objects.get(tracker.name)
+        for _, tracker, _ in pose_data
+    }
+
     for time, tracker, pose in pose_data:
-        tracker_obj = bpy.data.objects.get(tracker.name)
+        tracker_obj = tracker_objects.get(tracker.name)
         if not tracker_obj:
             continue
 
@@ -185,10 +193,14 @@ def _insert_action(ovr_context: OVRContext):
     start_frame = ovr_context.record_start_frame
 
     animation_data = {}
+    tracker_objects = {
+        tracker.name: bpy.data.objects.get(tracker.name)
+        for tracker in ovr_context.trackers
+    }
 
     for sample in pose_data:
         for time, tracker, pose in sample:
-            tracker_obj = bpy.data.objects.get(tracker.name)
+            tracker_obj = tracker_objects.get(tracker.name)
             if not tracker_obj:
                 continue
 
