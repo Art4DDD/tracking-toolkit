@@ -212,11 +212,13 @@ def _insert_action(ovr_context: OVRContext):
                     "locs": [],
                     "rots": [],
                     "scales": [],
-                    "prev_rot": None
+                    "prev_rot": None,
+                    "last_frame": None
                 }
 
             time_delta = time - take_start_time
-            frame = start_frame + time_delta.total_seconds() * framerate
+            raw_frame = start_frame + time_delta.total_seconds() * framerate
+            frame = int(raw_frame + 0.5)
 
             # получаем лок, рот, скейл из матрицы
             loc, rot, scale = pose.decompose()
@@ -232,11 +234,18 @@ def _insert_action(ovr_context: OVRContext):
             data["prev_rot"] = rot.copy()
             # -----------------------------
 
-            # сохраняем ключевые данные
-            data["frames"].append(frame)
-            data["locs"].extend(loc)
-            data["rots"].extend(rot)
-            data["scales"].extend(scale)
+            # сохраняем ключевые данные; если в тот же кадр пришел новый сэмпл,
+            # обновляем последний ключ вместо создания субкадра/дубликата.
+            if data["last_frame"] == frame:
+                data["locs"][-3:] = loc
+                data["rots"][-4:] = rot
+                data["scales"][-3:] = scale
+            else:
+                data["frames"].append(frame)
+                data["locs"].extend(loc)
+                data["rots"].extend(rot)
+                data["scales"].extend(scale)
+                data["last_frame"] = frame
 
 
     # Now insert or replace the data
