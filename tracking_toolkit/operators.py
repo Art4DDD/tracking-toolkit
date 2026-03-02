@@ -401,6 +401,8 @@ class CreateRefsOperator(bpy.types.Operator):
                                  "vr_controller_vive_1_5/vr_controller_vive_1_5.obj")
         hmd_model_path = (f"{install_dir}/resources/rendermodels/"
                           "generic_hmd/generic_hmd.obj")
+        base_station_model_path = (f"{install_dir}/resources/rendermodels/"
+                                   "lh_basestation_vive/lh_basestation_vive.obj")
 
         try:
             bpy.ops.wm.obj_import(filepath=tracker_model_path)
@@ -411,6 +413,13 @@ class CreateRefsOperator(bpy.types.Operator):
 
             bpy.ops.wm.obj_import(filepath=hmd_model_path)
             hmd_model = bpy.context.object
+
+            try:
+                bpy.ops.wm.obj_import(filepath=base_station_model_path)
+                base_station_model = bpy.context.object
+            except RuntimeError:
+                # Fallback to tracker model if a dedicated lighthouse model is unavailable.
+                base_station_model = tracker_model
         except RuntimeError:
             self.report(
                 {"ERROR"},
@@ -447,6 +456,8 @@ class CreateRefsOperator(bpy.types.Operator):
                 model = controller_model
             elif tracker.type == str(openvr.TrackedDeviceClass_HMD):
                 model = hmd_model
+            elif tracker.type == str(openvr.TrackedDeviceClass_TrackingReference):
+                model = base_station_model
             else:
                 model = tracker_model
 
@@ -502,6 +513,8 @@ class CreateRefsOperator(bpy.types.Operator):
         bpy.data.objects.remove(tracker_model)
         bpy.data.objects.remove(controller_model)
         bpy.data.objects.remove(hmd_model)
+        if base_station_model != tracker_model:
+            bpy.data.objects.remove(base_station_model)
 
         # Restore previous selection
         try:
