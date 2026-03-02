@@ -116,6 +116,34 @@ def _resolve_tracker_name(system, device_index: int, serial: str) -> str:
     return f"Device {device_index}"
 
 
+def _collect_tracker_debug_info(system, device_index: int, device_class: int) -> dict[str, str]:
+    fields = {
+        "index": str(device_index),
+        "class": str(device_class),
+        "tracking_system": _normalize_tracker_name(_safe_device_property(system, device_index, openvr.Prop_TrackingSystemName_String)),
+        "model": _normalize_tracker_name(_safe_device_property(system, device_index, openvr.Prop_ModelNumber_String)),
+        "serial": _normalize_tracker_name(_safe_device_property(system, device_index, openvr.Prop_SerialNumber_String)),
+        "manufacturer": _normalize_tracker_name(_safe_device_property(system, device_index, openvr.Prop_ManufacturerName_String)),
+        "render_model": _normalize_tracker_name(_safe_device_property(system, device_index, openvr.Prop_RenderModelName_String)),
+        "registered_type": _normalize_tracker_name(_safe_device_property(system, device_index, openvr.Prop_RegisteredDeviceType_String)),
+        "controller_type": _normalize_tracker_name(_safe_device_property(system, device_index, openvr.Prop_ControllerType_String)),
+        "resource_root": _normalize_tracker_name(_safe_device_property(system, device_index, openvr.Prop_ResourceRoot_String)),
+        "input_profile": _normalize_tracker_name(_safe_device_property(system, device_index, openvr.Prop_InputProfilePath_String)),
+    }
+
+    try:
+        role_hint = system.getInt32TrackedDeviceProperty(device_index, openvr.Prop_ControllerRoleHint_Int32)
+        fields["role"] = str(int(role_hint))
+    except Exception:
+        fields["role"] = ""
+
+    return {k: v for k, v in fields.items() if v}
+
+
+def _format_tracker_debug_info(debug_info: dict[str, str]) -> str:
+    return " | ".join(f"{key}={value}" for key, value in debug_info.items())
+
+
 def init_handles():
     vr_ipt = openvr.VRInput()
 
@@ -762,3 +790,7 @@ def load_trackers(ovr_context: OVRContext):
         tracker.type = str(device_class)
         tracker.index = i
         tracker.connected = bool(system.isTrackedDeviceConnected(i))  # Just in case, do it for both
+
+        debug_info = _collect_tracker_debug_info(system, i, device_class)
+        if debug_info:
+            print(f"[OpenVR Device] {_format_tracker_debug_info(debug_info)}")
