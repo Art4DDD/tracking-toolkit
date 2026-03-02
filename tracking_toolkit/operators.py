@@ -1,4 +1,5 @@
 import bpy
+import json
 import openvr
 from pathlib import Path
 from mathutils import Vector
@@ -482,11 +483,6 @@ class CreateRefsOperator(bpy.types.Operator):
             return None
 
         def _resolve_openvr_model_obj_path(tracker: OVRTracker) -> Path | None:
-            render_model_name = _get_prop(tracker.index, openvr.Prop_RenderModelName_String)
-            print(f"[OpenVR RenderModel] device={tracker.index} serial={tracker.serial} render_model={render_model_name}")
-            if not render_model_name:
-                return None
-
             render_models = openvr.VRRenderModels()
             get_original_path = (
                 getattr(render_models, "getRenderModelOriginalPath", None)
@@ -495,23 +491,86 @@ class CreateRefsOperator(bpy.types.Operator):
             if not get_original_path:
                 return None
 
-            result = get_original_path(render_model_name)
-            original_path = ""
-            if isinstance(result, tuple):
-                if result and isinstance(result[0], str):
-                    original_path = result[0]
-                elif len(result) > 1 and isinstance(result[1], str):
-                    original_path = result[1]
-            elif isinstance(result, str):
-                original_path = result
+            def _resolve_tokenized_path(raw_path: str) -> Path | None:
+                if not raw_path:
+                    return None
+                raw_path = raw_path.replace("\\", "/").strip()
+                if raw_path.startswith("{") and "}" in raw_path:
+                    token_end = raw_path.index("}")
+                    token = raw_path[1:token_end]
+                    suffix = raw_path[token_end + 1:].lstrip("/")
+                    candidates = [
+                        install_dir / "drivers" / token / "resources" / suffix,
+                        install_dir / "resources" / suffix,
+                    ]
+                    for candidate in candidates:
+                        if candidate.exists():
+                            return candidate
+                    return candidates[0]
+                path_obj = Path(raw_path)
+                return path_obj
 
-            original_path = (original_path or "").strip()
-            if not original_path:
-                return None
+            def _extract_render_model_refs(node, out: list[str]):
+                if isinstance(node, str):
+                    val = node.strip()
+                    if val and (
+                        "rendermodel" in val.lower()
+                        or val.lower().endswith(".obj")
+                        or val.startswith("{")
+                    ):
+                        out.append(val)
+                elif isinstance(node, dict):
+                    for value in node.values():
+                        _extract_render_model_refs(value, out)
+                elif isinstance(node, list):
+                    for value in node:
+                        _extract_render_model_refs(value, out)
 
-            path_obj = Path(original_path)
-            print(f"[OpenVR ModelPath] device={tracker.index} serial={tracker.serial} path={path_obj} source=render_models_api")
-            return path_obj
+            model_names: list[str] = []
+
+            input_profile = _get_prop(tracker.index, openvr.Prop_InputProfilePath_String)
+            profile_path = _resolve_tokenized_path(input_profile)
+            if profile_path and profile_path.exists() and profile_path.suffix.lower() == ".json":
+                try:
+                    profile_data = json.loads(profile_path.read_text(encoding="utf-8"))
+                    refs: list[str] = []
+                    _extract_render_model_refs(profile_data, refs)
+                    for ref in refs:
+                        ref_path = _resolve_tokenized_path(ref)
+                        if ref_path and ref_path.suffix.lower() == ".obj":
+                            print(f"[OpenVR ModelPath] device={tracker.index} serial={tracker.serial} path={ref_path} source=input_profile")
+                            return ref_path
+
+                        normalized = ref.replace("\\", "/").rstrip("/")
+                        model_names.append(normalized.split("/")[-1])
+                except Exception:
+                    pass
+
+            render_model_name = _get_prop(tracker.index, openvr.Prop_RenderModelName_String)
+            print(f"[OpenVR RenderModel] device={tracker.index} serial={tracker.serial} render_model={render_model_name}")
+            if render_model_name:
+                model_names.append(render_model_name)
+
+            for model_name in dict.fromkeys(name for name in model_names if name):
+                result = get_original_path(model_name)
+                original_path = ""
+                if isinstance(result, tuple):
+                    if result and isinstance(result[0], str):
+                        original_path = result[0]
+                    elif len(result) > 1 and isinstance(result[1], str):
+                        original_path = result[1]
+                elif isinstance(result, str):
+                    original_path = result
+
+                original_path = (original_path or "").strip()
+                if not original_path:
+                    continue
+
+                path_obj = Path(original_path)
+                print(f"[OpenVR ModelPath] device={tracker.index} serial={tracker.serial} path={path_obj} source=render_models_api model={model_name}")
+                return path_obj
+
+            return None
 
 
 
