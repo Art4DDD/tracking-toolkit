@@ -97,6 +97,14 @@ class OVRInput(bpy.types.PropertyGroup):
     a_button: bpy.props.BoolProperty(name="A pressed", default=False)
     b_button: bpy.props.BoolProperty(name="B pressed", default=False)
 
+    # Finger curl channels (0..1). These are currently estimated from legacy input axes/buttons,
+    # but can be driven by skeletal input in the future.
+    thumb_curl: bpy.props.FloatProperty(name="Thumb curl", default=0, min=0, max=1)
+    index_curl: bpy.props.FloatProperty(name="Index curl", default=0, min=0, max=1)
+    middle_curl: bpy.props.FloatProperty(name="Middle curl", default=0, min=0, max=1)
+    ring_curl: bpy.props.FloatProperty(name="Ring curl", default=0, min=0, max=1)
+    pinky_curl: bpy.props.FloatProperty(name="Pinky curl", default=0, min=0, max=1)
+
 
 def tracker_joint_filter(_, obj: bpy.types.Object) -> bool:
     return " Joint" in obj.name

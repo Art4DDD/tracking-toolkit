@@ -57,6 +57,22 @@ def _handle_input(ovr_context: OVRContext):
     r_ipt = ovr_context.r_input
 
 
+def _estimate_finger_curls(input_state: OVRInput):
+    joystick_x, joystick_y = input_state.joystick_position
+
+    # Legacy OpenVR actions don't expose per-finger bones here.
+    # Approximate curls for Knuckles/Index controllers from available controls.
+    thumb_curl = max(abs(joystick_x), abs(joystick_y), float(input_state.a_button), float(input_state.b_button))
+
+    input_state.thumb_curl = min(max(thumb_curl, 0.0), 1.0)
+    input_state.index_curl = min(max(input_state.trigger_strength, 0.0), 1.0)
+
+    grip = min(max(input_state.grip_strength, 0.0), 1.0)
+    input_state.middle_curl = grip
+    input_state.ring_curl = grip
+    input_state.pinky_curl = grip
+
+
 def _get_input(ovr_context: OVRContext):
     if not (action_handles and action_sets):
         return
@@ -68,7 +84,7 @@ def _get_input(ovr_context: OVRContext):
     vr_ipt.updateActionState(action_sets)
 
     def _make_vector(action_data):
-        return action_data.x, action_data.x
+        return action_data.x, action_data.y
 
     # Axis values
     l_ipt.joystick_position = _make_vector(vr_ipt.getAnalogActionData(action_handles["l_joystick"], 0))
@@ -77,14 +93,17 @@ def _get_input(ovr_context: OVRContext):
     l_ipt.trigger_strength = vr_ipt.getAnalogActionData(action_handles["l_trigger"], 0).x
     r_ipt.trigger_strength = vr_ipt.getAnalogActionData(action_handles["r_trigger"], 0).x
 
-    # l_ipt.grip_strength = vr_ipt.getAnalogActionData(action_handles["l_grip"], 0).x
-    # r_ipt.grip_strength = vr_ipt.getAnalogActionData(action_handles["r_grip"], 0).x
+    l_ipt.grip_strength = vr_ipt.getAnalogActionData(action_handles["l_grip"], 0).x
+    r_ipt.grip_strength = vr_ipt.getAnalogActionData(action_handles["r_grip"], 0).x
 
     l_ipt.a_button = vr_ipt.getDigitalActionData(action_handles["l_a"], 0).bState
     r_ipt.a_button = vr_ipt.getDigitalActionData(action_handles["r_a"], 0).bState
 
     l_ipt.b_button = vr_ipt.getDigitalActionData(action_handles["l_b"], 0).bState
     r_ipt.b_button = vr_ipt.getDigitalActionData(action_handles["r_b"], 0).bState
+
+    _estimate_finger_curls(l_ipt)
+    _estimate_finger_curls(r_ipt)
 
 
 def _get_poses(ovr_context: OVRContext) -> Generator[tuple[datetime.datetime, OVRTracker, Matrix], None, None]:
@@ -129,8 +148,8 @@ def _openvr_poll_thread_func(ovr_context: OVRContext):
                 # Keep a single chunk to avoid unbounded growth over time.
                 data_buffer[:] = [pose_chunk]
 
-        #_get_input(ovr_context)
-        #_handle_input(ovr_context)
+        _get_input(ovr_context)
+        _handle_input(ovr_context)
 
 
 def _clear_buffer():

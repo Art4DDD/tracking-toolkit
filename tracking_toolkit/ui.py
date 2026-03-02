@@ -98,6 +98,26 @@ class RecorderPanel(View3DPanel, bpy.types.Panel):
         layout.operator(ToggleCalibrationOperator.bl_idname, text=calibrate_btn_label)
         layout.label(text=calibrate_hint)
 
+        # Input diagnostics
+        layout.label(text="Controller Fingers (estimated)")
+
+        row = layout.row(align=True)
+        col_l = row.column(align=True)
+        col_l.label(text="Left")
+        col_l.prop(ovr_context.l_input, "thumb_curl", slider=True)
+        col_l.prop(ovr_context.l_input, "index_curl", slider=True)
+        col_l.prop(ovr_context.l_input, "middle_curl", slider=True)
+        col_l.prop(ovr_context.l_input, "ring_curl", slider=True)
+        col_l.prop(ovr_context.l_input, "pinky_curl", slider=True)
+
+        col_r = row.column(align=True)
+        col_r.label(text="Right")
+        col_r.prop(ovr_context.r_input, "thumb_curl", slider=True)
+        col_r.prop(ovr_context.r_input, "index_curl", slider=True)
+        col_r.prop(ovr_context.r_input, "middle_curl", slider=True)
+        col_r.prop(ovr_context.r_input, "ring_curl", slider=True)
+        col_r.prop(ovr_context.r_input, "pinky_curl", slider=True)
+
         # Recording
         layout.label(text="Recording")
 
