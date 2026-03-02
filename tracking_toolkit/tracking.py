@@ -213,7 +213,8 @@ def _insert_action(ovr_context: OVRContext):
                     "rots": [],
                     "scales": [],
                     "prev_rot": None,
-                    "last_frame": None
+                    "last_frame": None,
+                    "last_frame_error": None
                 }
 
             time_delta = time - take_start_time
@@ -236,16 +237,24 @@ def _insert_action(ovr_context: OVRContext):
 
             # сохраняем ключевые данные; если в тот же кадр пришел новый сэмпл,
             # обновляем последний ключ вместо создания субкадра/дубликата.
+            frame_error = abs(raw_frame - frame)
             if data["last_frame"] == frame:
+                # OpenVR samples arrive unevenly; keep the sample closest to
+                # the integer frame time instead of blindly taking the last one.
+                if frame_error >= data["last_frame_error"]:
+                    continue
+
                 data["locs"][-3:] = loc
                 data["rots"][-4:] = rot
                 data["scales"][-3:] = scale
+                data["last_frame_error"] = frame_error
             else:
                 data["frames"].append(frame)
                 data["locs"].extend(loc)
                 data["rots"].extend(rot)
                 data["scales"].extend(scale)
                 data["last_frame"] = frame
+                data["last_frame_error"] = frame_error
 
 
     # Now insert or replace the data
