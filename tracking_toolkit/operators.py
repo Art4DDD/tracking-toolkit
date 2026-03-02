@@ -548,6 +548,8 @@ class CreateRefsOperator(bpy.types.Operator):
             manufacturer = _get_prop(tracker.index, openvr.Prop_ManufacturerName_String).lower()
             model_number = _get_prop(tracker.index, openvr.Prop_ModelNumber_String).lower()
             controller_type = _get_prop(tracker.index, openvr.Prop_ControllerType_String).lower()
+            registered_type = _get_prop(tracker.index, openvr.Prop_RegisteredDeviceType_String).lower()
+            input_profile = _get_prop(tracker.index, openvr.Prop_InputProfilePath_String).lower()
 
             keys = []
             controller_side = _controller_hand_side(tracker)
@@ -555,7 +557,13 @@ class CreateRefsOperator(bpy.types.Operator):
             if render_model_name:
                 keys.append(render_model_name)
 
-            is_pico = "pico" in manufacturer or "pico" in model_number or "pico" in render_model_name
+            is_pico = (
+                "pico" in manufacturer
+                or "pico" in model_number
+                or "pico" in render_model_name
+                or "pico" in registered_type
+                or "pico" in input_profile
+            )
 
             if is_pico:
                 if controller_side:
