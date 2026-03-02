@@ -402,25 +402,43 @@ class CreateRefsOperator(bpy.types.Operator):
             str(openvr.TrackedDeviceClass_GenericTracker): "vr_tracker_vive_3_0",
             str(openvr.TrackedDeviceClass_Controller): "vr_controller_vive_1_5",
             str(openvr.TrackedDeviceClass_HMD): "generic_hmd",
-            str(openvr.TrackedDeviceClass_TrackingReference): "lh_basestation_vive",
+            str(openvr.TrackedDeviceClass_TrackingReference): "lh_basestation_vive_2_0",
         }
-
-        fallback_lighthouse_models = [
-            "lh_basestation_vive_2_0",
-            "lh_basestation_vive",
-        ]
 
         model_templates: dict[str, bpy.types.Object] = {}
 
-        shared_rendermodels_dir = install_dir / "resources" / "rendermodels"
-        driver_rendermodel_dirs = []
-        if (install_dir / "drivers").exists():
-            driver_rendermodel_dirs = [
-                d / "resources" / "rendermodels"
-                for d in (install_dir / "drivers").glob("*")
-            ]
-
-        all_rendermodel_dirs = [shared_rendermodels_dir, *driver_rendermodel_dirs]
+        # Static model database (explicit known model paths, no directory scanning)
+        model_db = {
+            "vr_controller_knuckles": [
+                install_dir / "resources" / "rendermodels" / "vr_controller_knuckles" / "vr_controller_knuckles.obj",
+                install_dir / "resources" / "rendermodels" / "valve_controller_knu_1_0" / "valve_controller_knu_1_0.obj",
+            ],
+            "pico_controller": [
+                install_dir / "drivers" / "pico" / "resources" / "rendermodels" / "pico_controller" / "pico_controller.obj",
+                install_dir / "drivers" / "pico" / "resources" / "rendermodels" / "pico4_controller" / "pico4_controller.obj",
+                install_dir / "drivers" / "pico" / "resources" / "rendermodels" / "pico_neo3_controller" / "pico_neo3_controller.obj",
+            ],
+            "tundra_tracker": [
+                install_dir / "drivers" / "tundra" / "resources" / "rendermodels" / "tundra_tracker" / "tundra_tracker.obj",
+                install_dir / "drivers" / "tundra" / "resources" / "rendermodels" / "tundra_tracker_hdk" / "tundra_tracker_hdk.obj",
+            ],
+            "lh_basestation_vive_2_0": [
+                install_dir / "resources" / "rendermodels" / "lh_basestation_vive_2_0" / "lh_basestation_vive_2_0.obj",
+            ],
+            "lh_basestation_vive": [
+                install_dir / "resources" / "rendermodels" / "lh_basestation_vive" / "lh_basestation_vive.obj",
+            ],
+            "vr_tracker_vive_3_0": [
+                install_dir / "drivers" / "htc" / "resources" / "rendermodels" / "vr_tracker_vive_3_0" / "vr_tracker_vive_3_0.obj",
+                install_dir / "resources" / "rendermodels" / "vr_tracker_vive_3_0" / "vr_tracker_vive_3_0.obj",
+            ],
+            "vr_controller_vive_1_5": [
+                install_dir / "resources" / "rendermodels" / "vr_controller_vive_1_5" / "vr_controller_vive_1_5.obj",
+            ],
+            "generic_hmd": [
+                install_dir / "resources" / "rendermodels" / "generic_hmd" / "generic_hmd.obj",
+            ],
+        }
 
         def _get_prop(index: int, prop: int) -> str:
             try:
@@ -428,110 +446,32 @@ class CreateRefsOperator(bpy.types.Operator):
             except Exception:
                 return ""
 
-        def _device_model_hints(tracker: OVRTracker) -> list[str]:
-            render_model_name = _get_prop(tracker.index, openvr.Prop_RenderModelName_String)
+        def _resolve_model_obj_path(tracker: OVRTracker) -> Path | None:
             manufacturer = _get_prop(tracker.index, openvr.Prop_ManufacturerName_String).lower()
             model_number = _get_prop(tracker.index, openvr.Prop_ModelNumber_String).lower()
             controller_type = _get_prop(tracker.index, openvr.Prop_ControllerType_String).lower()
-            tracking_system = _get_prop(tracker.index, openvr.Prop_TrackingSystemName_String).lower()
 
-            hints = []
-            if render_model_name:
-                hints.append(render_model_name)
-
+            keys = []
             if "index" in model_number or "knuckles" in controller_type or "knuckles" in model_number:
-                hints.extend(["vr_controller_knuckles", "valve_controller_knu_1_0", "valve_controller_knuckles"])
+                keys.append("vr_controller_knuckles")
 
-            if "pico" in manufacturer or "pico" in model_number or "pico" in tracking_system:
-                hints.extend(["pico_controller", "pico_neo3_controller", "pico4_controller"])
+            if "pico" in manufacturer or "pico" in model_number:
+                keys.append("pico_controller")
 
             if "tundra" in manufacturer or "tundra" in model_number:
-                hints.extend(["tundra_tracker", "tundra_tracker_hdk", "vr_tracker_vive_3_0"])
+                keys.append("tundra_tracker")
 
             if tracker.type == str(openvr.TrackedDeviceClass_TrackingReference):
-                hints.extend(fallback_lighthouse_models)
+                keys.extend(["lh_basestation_vive_2_0", "lh_basestation_vive"])
 
-            class_fallback = fallback_models.get(tracker.type, "")
-            if class_fallback:
-                hints.append(class_fallback)
+            class_model = fallback_models.get(tracker.type)
+            if class_model:
+                keys.append(class_model)
 
-            return list(dict.fromkeys([h for h in hints if h]))
-
-        def _candidate_obj_paths(model_name: str) -> list[Path]:
-            model_name = model_name.strip().replace('\\', '/').strip('/')
-            if not model_name:
-                return []
-
-            model_base = model_name.split('/')[-1]
-            candidates = []
-            for render_dir in all_rendermodel_dirs:
-                candidates.extend([
-                    render_dir / model_name / f"{model_base}.obj",
-                    render_dir / model_name / "model.obj",
-                    render_dir / model_base / f"{model_base}.obj",
-                    render_dir / model_base / "model.obj",
-                ])
-
-            return candidates
-
-        def _find_model_dir_by_hint(hint: str) -> Path | None:
-            hint = hint.lower().strip()
-            if not hint:
-                return None
-
-            hint_tokens = [tok for tok in hint.replace('-', '_').split('_') if tok]
-            ranked = []
-
-            for render_dir in all_rendermodel_dirs:
-                if not render_dir.exists():
-                    continue
-
-                for entry in render_dir.iterdir():
-                    if not entry.is_dir():
-                        continue
-
-                    name = entry.name.lower()
-                    score = 0
-                    if name == hint:
-                        score = 100
-                    elif hint in name:
-                        score = 50
-                    elif any(tok in name for tok in hint_tokens):
-                        score = 10
-
-                    if score > 0:
-                        ranked.append((score, entry))
-
-            if not ranked:
-                return None
-
-            ranked.sort(key=lambda x: x[0], reverse=True)
-            return ranked[0][1]
-
-        def _resolve_model_obj_path(tracker: OVRTracker) -> Path | None:
-            hints = _device_model_hints(tracker)
-
-            for model_name in hints:
-                for path in _candidate_obj_paths(model_name):
-                    if path.exists():
-                        return path
-
-            for hint in hints:
-                model_dir = _find_model_dir_by_hint(hint)
-                if not model_dir:
-                    continue
-
-                direct_obj = model_dir / f"{model_dir.name}.obj"
-                if direct_obj.exists():
-                    return direct_obj
-
-                model_obj = model_dir / "model.obj"
-                if model_obj.exists():
-                    return model_obj
-
-                objs = sorted(model_dir.glob("*.obj"))
-                if objs:
-                    return objs[0]
+            for key in dict.fromkeys(keys):
+                for model_path in model_db.get(key, []):
+                    if model_path.exists():
+                        return model_path
 
             return None
 
