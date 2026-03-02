@@ -68,134 +68,6 @@ def init_handles():
 
     global action_handles
     action_handles = {
-        "l_joystick": _get_action_handle_first([
-            "/actions/legacy/in/Left_Axis0_Value",
-            "/actions/main/in/LeftJoystick",
-            "/actions/default/in/LeftJoystick",
-        ]),
-        "r_joystick": _get_action_handle_first([
-            "/actions/legacy/in/Right_Axis1_Value",
-            "/actions/main/in/RightJoystick",
-            "/actions/default/in/RightJoystick",
-        ]),
-
-        "l_trigger": _get_action_handle_first([
-            "/actions/legacy/in/Left_Axis1_Value",
-            "/actions/main/in/LeftTriggerValue",
-            "/actions/default/in/LeftTriggerValue",
-        ]),
-        "r_trigger": _get_action_handle_first([
-            "/actions/legacy/in/Right_Axis1_Value",
-            "/actions/main/in/RightTriggerValue",
-            "/actions/default/in/RightTriggerValue",
-        ]),
-
-        "l_grip": _get_action_handle_first([
-            "/actions/legacy/in/Left_Axis2_Value",
-            "/actions/main/in/LeftGripValue",
-            "/actions/default/in/LeftGripValue",
-        ]),
-        "r_grip": _get_action_handle_first([
-            "/actions/legacy/in/Right_Axis2_Value",
-            "/actions/main/in/RightGripValue",
-            "/actions/default/in/RightGripValue",
-        ]),
-
-        "r_a": _get_action_handle_first([
-            "/actions/legacy/in/Right_A_Press",
-            "/actions/main/in/RightA",
-            "/actions/default/in/RightA",
-        ]),
-        "l_a": _get_action_handle_first([
-            "/actions/legacy/in/Left_A_Press",
-            "/actions/main/in/LeftA",
-            "/actions/default/in/LeftA",
-        ]),
-
-        "l_b": _get_action_handle_first([
-            "/actions/legacy/in/Left_ApplicationMenu_Press",
-            "/actions/main/in/LeftB",
-            "/actions/default/in/LeftB",
-        ]),
-        "r_b": _get_action_handle_first([
-            "/actions/legacy/in/Right_ApplicationMenu_Press",
-            "/actions/main/in/RightB",
-            "/actions/default/in/RightB",
-        ]),
-
-        # Finger values (try multiple common action naming conventions)
-        "l_thumb": _get_action_handle_first([
-            "/actions/legacy/in/Left_Finger_Thumb_Value",
-            "/actions/main/in/LeftThumbCurl",
-            "/actions/default/in/LeftThumbCurl",
-            "/actions/main/in/LeftThumb",
-            "/actions/default/in/LeftThumb",
-        ]),
-        "l_index": _get_action_handle_first([
-            "/actions/legacy/in/Left_Finger_Index_Value",
-            "/actions/main/in/LeftIndexCurl",
-            "/actions/default/in/LeftIndexCurl",
-            "/actions/main/in/LeftIndex",
-            "/actions/default/in/LeftIndex",
-        ]),
-        "l_middle": _get_action_handle_first([
-            "/actions/legacy/in/Left_Finger_Middle_Value",
-            "/actions/main/in/LeftMiddleCurl",
-            "/actions/default/in/LeftMiddleCurl",
-            "/actions/main/in/LeftMiddle",
-            "/actions/default/in/LeftMiddle",
-        ]),
-        "l_ring": _get_action_handle_first([
-            "/actions/legacy/in/Left_Finger_Ring_Value",
-            "/actions/main/in/LeftRingCurl",
-            "/actions/default/in/LeftRingCurl",
-            "/actions/main/in/LeftRing",
-            "/actions/default/in/LeftRing",
-        ]),
-        "l_pinky": _get_action_handle_first([
-            "/actions/legacy/in/Left_Finger_Pinky_Value",
-            "/actions/main/in/LeftPinkyCurl",
-            "/actions/default/in/LeftPinkyCurl",
-            "/actions/main/in/LeftPinky",
-            "/actions/default/in/LeftPinky",
-        ]),
-
-        "r_thumb": _get_action_handle_first([
-            "/actions/legacy/in/Right_Finger_Thumb_Value",
-            "/actions/main/in/RightThumbCurl",
-            "/actions/default/in/RightThumbCurl",
-            "/actions/main/in/RightThumb",
-            "/actions/default/in/RightThumb",
-        ]),
-        "r_index": _get_action_handle_first([
-            "/actions/legacy/in/Right_Finger_Index_Value",
-            "/actions/main/in/RightIndexCurl",
-            "/actions/default/in/RightIndexCurl",
-            "/actions/main/in/RightIndex",
-            "/actions/default/in/RightIndex",
-        ]),
-        "r_middle": _get_action_handle_first([
-            "/actions/legacy/in/Right_Finger_Middle_Value",
-            "/actions/main/in/RightMiddleCurl",
-            "/actions/default/in/RightMiddleCurl",
-            "/actions/main/in/RightMiddle",
-            "/actions/default/in/RightMiddle",
-        ]),
-        "r_ring": _get_action_handle_first([
-            "/actions/legacy/in/Right_Finger_Ring_Value",
-            "/actions/main/in/RightRingCurl",
-            "/actions/default/in/RightRingCurl",
-            "/actions/main/in/RightRing",
-            "/actions/default/in/RightRing",
-        ]),
-        "r_pinky": _get_action_handle_first([
-            "/actions/legacy/in/Right_Finger_Pinky_Value",
-            "/actions/main/in/RightPinkyCurl",
-            "/actions/default/in/RightPinkyCurl",
-            "/actions/main/in/RightPinky",
-            "/actions/default/in/RightPinky",
-        ]),
-
         # Skeletal actions from default SteamVR manifest (Knuckles)
         "l_skeleton": _get_action_handle_first([
             "/actions/default/in/SkeletonLeftHand",
@@ -227,37 +99,6 @@ def _get_input(ovr_context: OVRContext):
 
     vr_ipt.updateActionState(action_sets)
 
-    def _get_analog_value(action_key: str, default: float = 0.0) -> float:
-        action = action_handles.get(action_key)
-        if action is None:
-            return default
-
-        try:
-            return float(vr_ipt.getAnalogActionData(action, 0).x)
-        except Exception:
-            return default
-
-    def _get_digital_value(action_key: str, default: bool = False) -> bool:
-        action = action_handles.get(action_key)
-        if action is None:
-            return default
-
-        try:
-            return bool(vr_ipt.getDigitalActionData(action, 0).bState)
-        except Exception:
-            return default
-
-    def _get_analog_vector(action_key: str, default=(0.0, 0.0)) -> tuple[float, float]:
-        action = action_handles.get(action_key)
-        if action is None:
-            return default
-
-        try:
-            analog_data = vr_ipt.getAnalogActionData(action, 0)
-            return float(analog_data.x), float(analog_data.y)
-        except Exception:
-            return default
-
     def _calc_finger_curl(bone_transforms, chain: tuple[int, ...]) -> float:
         # Use alignment between each segment and its parent as a curl signal.
         # 0 -> extended, 1 -> curled.
@@ -278,7 +119,6 @@ def _get_input(ovr_context: OVRContext):
             if length <= 1e-6:
                 continue
 
-            # Treat the local forward axis as +Y in model space; convert deviation into curl.
             forward = vec[1] / length
             curl = max(0.0, min(1.0, (1.0 - forward) * 0.5))
             curls.append(curl)
@@ -328,35 +168,6 @@ def _get_input(ovr_context: OVRContext):
 
         return result
 
-    # Axis values
-    l_ipt.joystick_position = _get_analog_vector("l_joystick")
-    r_ipt.joystick_position = _get_analog_vector("r_joystick")
-
-    l_ipt.trigger_strength = _get_analog_value("l_trigger")
-    r_ipt.trigger_strength = _get_analog_value("r_trigger")
-    l_ipt.grip_strength = _get_analog_value("l_grip")
-    r_ipt.grip_strength = _get_analog_value("r_grip")
-
-    l_ipt.a_button = _get_digital_value("l_a")
-    r_ipt.a_button = _get_digital_value("r_a")
-
-    l_ipt.b_button = _get_digital_value("l_b")
-    r_ipt.b_button = _get_digital_value("r_b")
-
-    # Finger curls: use explicit finger channels when available, otherwise fallback to trigger/grip estimation.
-    l_ipt.thumb_curl = _get_analog_value("l_thumb", 1.0 if (l_ipt.a_button or l_ipt.b_button) else 0.0)
-    l_ipt.index_curl = _get_analog_value("l_index", l_ipt.trigger_strength)
-    l_ipt.middle_curl = _get_analog_value("l_middle", l_ipt.grip_strength)
-    l_ipt.ring_curl = _get_analog_value("l_ring", l_ipt.grip_strength)
-    l_ipt.pinky_curl = _get_analog_value("l_pinky", l_ipt.grip_strength)
-
-    r_ipt.thumb_curl = _get_analog_value("r_thumb", 1.0 if (r_ipt.a_button or r_ipt.b_button) else 0.0)
-    r_ipt.index_curl = _get_analog_value("r_index", r_ipt.trigger_strength)
-    r_ipt.middle_curl = _get_analog_value("r_middle", r_ipt.grip_strength)
-    r_ipt.ring_curl = _get_analog_value("r_ring", r_ipt.grip_strength)
-    r_ipt.pinky_curl = _get_analog_value("r_pinky", r_ipt.grip_strength)
-
-    # Prefer true skeletal hand input when available (Index/Knuckles)
     l_skeletal = _get_skeletal_finger_curls("l_skeleton")
     if l_skeletal:
         l_ipt.thumb_curl = l_skeletal["thumb"]
