@@ -26,6 +26,8 @@ recording_active = False
 action_sets = []
 action_handles = {}
 
+FINGER_CHANNELS = ("thumb_curl", "index_curl", "middle_curl", "ring_curl", "pinky_curl")
+
 FINGER_BONE_CHAINS = {
     "thumb": (2, 3, 4, 5),
     "index": (6, 7, 8, 9, 10),
@@ -237,17 +239,50 @@ def _snapshot_input_state(ovr_context: OVRContext):
     r_ipt: OVRInput = ovr_context.r_input
 
     return datetime.datetime.now(), {
-        "OVRContext.l_input.thumb_curl": l_ipt.thumb_curl,
-        "OVRContext.l_input.index_curl": l_ipt.index_curl,
-        "OVRContext.l_input.middle_curl": l_ipt.middle_curl,
-        "OVRContext.l_input.ring_curl": l_ipt.ring_curl,
-        "OVRContext.l_input.pinky_curl": l_ipt.pinky_curl,
-        "OVRContext.r_input.thumb_curl": r_ipt.thumb_curl,
-        "OVRContext.r_input.index_curl": r_ipt.index_curl,
-        "OVRContext.r_input.middle_curl": r_ipt.middle_curl,
-        "OVRContext.r_input.ring_curl": r_ipt.ring_curl,
-        "OVRContext.r_input.pinky_curl": r_ipt.pinky_curl,
+        "left": {
+            "thumb_curl": l_ipt.thumb_curl,
+            "index_curl": l_ipt.index_curl,
+            "middle_curl": l_ipt.middle_curl,
+            "ring_curl": l_ipt.ring_curl,
+            "pinky_curl": l_ipt.pinky_curl,
+        },
+        "right": {
+            "thumb_curl": r_ipt.thumb_curl,
+            "index_curl": r_ipt.index_curl,
+            "middle_curl": r_ipt.middle_curl,
+            "ring_curl": r_ipt.ring_curl,
+            "pinky_curl": r_ipt.pinky_curl,
+        },
     }
+
+
+def _resolve_controller_targets(ovr_context: OVRContext) -> dict[str, bpy.types.Object]:
+    system = openvr.VRSystem()
+
+    role_prop = openvr.Prop_ControllerRoleHint_Int32
+    left_role = getattr(openvr, "TrackedControllerRole_LeftHand", 1)
+    right_role = getattr(openvr, "TrackedControllerRole_RightHand", 2)
+
+    targets = {}
+    for tracker in ovr_context.trackers:
+        if tracker.type != str(openvr.TrackedDeviceClass_Controller):
+            continue
+
+        target_obj = tracker.target.object
+        if not target_obj:
+            continue
+
+        try:
+            role = system.getInt32TrackedDeviceProperty(tracker.index, role_prop)
+        except Exception:
+            continue
+
+        if role == left_role:
+            targets["left"] = target_obj
+        elif role == right_role:
+            targets["right"] = target_obj
+
+    return targets
 
 def _get_poses(ovr_context: OVRContext) -> Generator[tuple[datetime.datetime, OVRTracker, Matrix], None, None]:
     system = openvr.VRSystem()
@@ -314,7 +349,7 @@ def _get_buffer() -> list[list[tuple[datetime.datetime, OVRTracker, Matrix]]]:
 
 
 
-def _get_input_buffer() -> list[tuple[datetime.datetime, dict[str, float]]]:
+def _get_input_buffer() -> list[tuple[datetime.datetime, dict[str, dict[str, float]]]]:
     global input_record_buffer, buffer_lock
 
     with buffer_lock:
@@ -476,48 +511,57 @@ def _insert_action(ovr_context: OVRContext):
         tracker_obj.animation_data.action_slot = action_slot
 
     if num_input_samples > 0:
-        scene = bpy.context.scene
-        if not scene.animation_data:
-            scene.animation_data_create()
-
-        input_action = scene.animation_data.action
-        if not input_action:
-            input_action = bpy.data.actions.new(name="OVR_Input_Action")
-            scene.animation_data.action = input_action
-
-        input_channels = {
-            "OVRContext.l_input.thumb_curl": [],
-            "OVRContext.l_input.index_curl": [],
-            "OVRContext.l_input.middle_curl": [],
-            "OVRContext.l_input.ring_curl": [],
-            "OVRContext.l_input.pinky_curl": [],
-            "OVRContext.r_input.thumb_curl": [],
-            "OVRContext.r_input.index_curl": [],
-            "OVRContext.r_input.middle_curl": [],
-            "OVRContext.r_input.ring_curl": [],
-            "OVRContext.r_input.pinky_curl": [],
-        }
+        controller_targets = _resolve_controller_targets(ovr_context)
         input_frames = []
+        hand_channel_values = {
+            "left": {channel: [] for channel in FINGER_CHANNELS},
+            "right": {channel: [] for channel in FINGER_CHANNELS},
+        }
 
         for sample_time, sample_values in input_data:
             time_delta = sample_time - take_start_time
             frame = start_frame + time_delta.total_seconds() * framerate
             input_frames.append(frame)
-            for channel_path in input_channels:
-                input_channels[channel_path].append(sample_values.get(channel_path, 0.0))
 
-        for data_path, values in input_channels.items():
-            fcurve = input_action.fcurves.find(data_path, index=0)
-            if fcurve:
-                input_action.fcurves.remove(fcurve)
-            fcurve = input_action.fcurves.new(data_path, index=0)
-            fcurve.keyframe_points.add(len(input_frames))
+            for hand in ("left", "right"):
+                hand_values = sample_values.get(hand, {})
+                for channel in FINGER_CHANNELS:
+                    hand_channel_values[hand][channel].append(hand_values.get(channel, 0.0))
 
-            key_coords = [0.0] * (len(input_frames) * 2)
-            key_coords[0::2] = input_frames
-            key_coords[1::2] = values
-            fcurve.keyframe_points.foreach_set("co", key_coords)
-            fcurve.update()
+        for hand, target_obj in controller_targets.items():
+            if target_obj.animation_data is None:
+                target_obj.animation_data_create()
+
+            action = target_obj.animation_data.action
+            if not action:
+                action = bpy.data.actions.new(name=f"{target_obj.name}_Input_Action")
+                target_obj.animation_data.action = action
+
+            for channel in FINGER_CHANNELS:
+                if channel not in target_obj:
+                    target_obj[channel] = 0.0
+
+                data_path = f'["{channel}"]'
+
+                fcurve = action.fcurves.find(data_path, index=0)
+                if fcurve:
+                    action.fcurves.remove(fcurve)
+                fcurve = action.fcurves.new(data_path, index=0)
+                fcurve.keyframe_points.add(len(input_frames))
+
+                values = hand_channel_values[hand][channel]
+
+                key_coords = [0.0] * (len(input_frames) * 2)
+                key_coords[0::2] = input_frames
+                key_coords[1::2] = values
+                fcurve.keyframe_points.foreach_set("co", key_coords)
+                fcurve.update()
+
+                if values:
+                    target_obj[channel] = values[-1]
+
+            action_slot = action.slots[0]
+            target_obj.animation_data.action_slot = action_slot
 
     print("Done")
 
