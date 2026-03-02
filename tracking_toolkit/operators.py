@@ -525,8 +525,9 @@ class CreateRefsOperator(bpy.types.Operator):
 
         def _get_or_import_model(path: Path) -> bpy.types.Object | None:
             key = str(path.resolve())
-            if key in model_templates:
-                return model_templates[key]
+            cached = model_templates.get(key)
+            if cached and cached.name in bpy.data.objects:
+                return cached
 
             try:
                 bpy.ops.wm.obj_import(filepath=str(path))
@@ -540,6 +541,8 @@ class CreateRefsOperator(bpy.types.Operator):
             imported.location = (0, 0, 0)
             imported.rotation_euler = (0, 0, 0)
             imported.scale = (1, 1, 1)
+            imported.name = f"TTK_Template_{path.stem}"
+            imported.hide_render = True
 
             model_templates[key] = imported
             return imported
@@ -567,7 +570,7 @@ class CreateRefsOperator(bpy.types.Operator):
 
             # Delete existing target
             tracker_target = bpy.data.objects.get(tracker_name)
-            if tracker_target:
+            if tracker_target and tracker_target != model:
                 bpy.data.objects.remove(tracker_target)
 
             # Create target
@@ -587,7 +590,7 @@ class CreateRefsOperator(bpy.types.Operator):
 
             # Delete existing joint
             tracker_joint = bpy.data.objects.get(joint_name)
-            if tracker_joint:
+            if tracker_joint and tracker_joint != model:
                 bpy.data.objects.remove(tracker_joint)
 
             # Create joint
