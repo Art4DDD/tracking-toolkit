@@ -1,8 +1,9 @@
 import bpy
 import openvr
+from pathlib import Path
 from mathutils import Vector
 
-from .properties import Preferences, OVRTransform, OVRContext
+from .properties import Preferences, OVRTransform, OVRContext, OVRTracker
 from .tracking import load_trackers, start_recording, stop_recording, start_preview, stop_preview, init_handles
 from .. import __package__ as base_package
 
@@ -350,6 +351,18 @@ class ToggleActiveOperator(bpy.types.Operator):
             openvr.shutdown()
         else:
             openvr.init(openvr.VRApplication_Scene)
+
+            manifest_path = Path(__file__).parent / "actions.json"
+            vr_input = openvr.VRInput()
+
+            set_manifest_fn = getattr(vr_input, "setActionManifestPath", None) or getattr(vr_input, "SetActionManifestPath", None)
+            if set_manifest_fn and manifest_path.exists():
+                try:
+                    set_manifest_fn(str(manifest_path.resolve()))
+                    print(f"Set OpenVR action manifest: {manifest_path}")
+                except Exception as e:
+                    print(f"Failed to set OpenVR action manifest: {e}")
+
             init_handles()
             load_trackers(ovr_context)
             start_preview(ovr_context)
@@ -393,42 +406,132 @@ class CreateRefsOperator(bpy.types.Operator):
 
         # Get model paths from preferences
         preferences: Preferences | None = context.preferences.addons[base_package].preferences
+        install_dir = Path(preferences.steamvr_installation_path)
 
-        install_dir = preferences.steamvr_installation_path
-        tracker_model_path = (f"{install_dir}/drivers/htc/resources/rendermodels/"
-                              "vr_tracker_vive_3_0/vr_tracker_vive_3_0.obj")
-        controller_model_path = (f"{install_dir}/resources/rendermodels/"
-                                 "vr_controller_vive_1_5/vr_controller_vive_1_5.obj")
-        hmd_model_path = (f"{install_dir}/resources/rendermodels/"
-                          "generic_hmd/generic_hmd.obj")
+        system = openvr.VRSystem()
 
-        try:
-            bpy.ops.wm.obj_import(filepath=tracker_model_path)
-            tracker_model = bpy.context.object
+        fallback_models = {
+            str(openvr.TrackedDeviceClass_GenericTracker): "vr_tracker_vive_3_0",
+            str(openvr.TrackedDeviceClass_Controller): "vr_controller_vive_1_5",
+            str(openvr.TrackedDeviceClass_HMD): "generic_hmd",
+            str(openvr.TrackedDeviceClass_TrackingReference): "lh_basestation_valve_gen2",
+        }
 
-            bpy.ops.wm.obj_import(filepath=controller_model_path)
-            controller_model = bpy.context.object
+        model_templates: dict[str, bpy.types.Object] = {}
 
-            bpy.ops.wm.obj_import(filepath=hmd_model_path)
-            hmd_model = bpy.context.object
-        except RuntimeError:
-            self.report(
-                {"ERROR"},
-                "Could not import tracker models. Check your SteamVR path in the addon preferences."
-            )
-            return {"FINISHED"}
+        # Static model database (explicit known model paths, no directory scanning)
+        model_db = {
+            "vr_controller_knuckles_left": [
+                install_dir / "drivers" / "indexcontroller" / "resources" / "rendermodels" / "valve_controller_knu_ev2_0_left" / "valve_controller_knu_ev2_0_left.obj",
+            ],
+            "vr_controller_knuckles_right": [
+                install_dir / "drivers" / "indexcontroller" / "resources" / "rendermodels" / "valve_controller_knu_ev2_0_right" / "valve_controller_knu_ev2_0_right.obj",
+            ],
+            "pico_controller_left": [
+                install_dir / "drivers" / "vrlink" / "resources" / "rendermodels" / "pico_4_controller_left" / "pico_4_controller_left.obj",
+            ],
+            "pico_controller_right": [
+                install_dir / "drivers" / "vrlink" / "resources" / "rendermodels" / "pico_4_controller_right" / "pico_4_controller_right.obj",
+            ],
+            "tundra_tracker": [
+                install_dir / "drivers" / "tundra_labs" / "resources" / "rendermodels" / "tundra_tracker" / "tundra_tracker.obj",
+            ],
+            "lh_basestation_valve_gen2": [
+                install_dir / "resources" / "rendermodels" / "lh_basestation_valve_gen2" / "lh_basestation_valve_gen2.obj",
+            ],
+            "lh_basestation_vive": [
+                install_dir / "resources" / "rendermodels" / "lh_basestation_vive" / "lh_basestation_vive.obj",
+            ],
+            "vr_tracker_vive_3_0": [
+                install_dir / "drivers" / "htc" / "resources" / "rendermodels" / "vr_tracker_vive_3_0" / "vr_tracker_vive_3_0.obj",
+                install_dir / "resources" / "rendermodels" / "vr_tracker_vive_3_0" / "vr_tracker_vive_3_0.obj",
+            ],
+            "vr_controller_vive_1_5": [
+                install_dir / "resources" / "rendermodels" / "vr_controller_vive_1_5" / "vr_controller_vive_1_5.obj",
+            ],
+            "generic_hmd": [
+                install_dir / "resources" / "rendermodels" / "generic_hmd" / "generic_hmd.obj",
+            ],
+        }
+
+        def _get_prop(index: int, prop: int) -> str:
+            try:
+                return system.getStringTrackedDeviceProperty(index, prop)
+            except Exception:
+                return ""
+
+        def _get_prop_int(index: int, prop: int) -> int | None:
+            try:
+                return system.getInt32TrackedDeviceProperty(index, prop)
+            except Exception:
+                return None
+
+        def _controller_hand_side(tracker: OVRTracker) -> str | None:
+            role = _get_prop_int(tracker.index, openvr.Prop_ControllerRoleHint_Int32)
+            left_role = getattr(openvr, "TrackedControllerRole_LeftHand", 1)
+            right_role = getattr(openvr, "TrackedControllerRole_RightHand", 2)
+
+            if role == left_role:
+                return "left"
+            if role == right_role:
+                return "right"
+            return None
+
+        def _resolve_model_obj_path(tracker: OVRTracker) -> Path | None:
+            manufacturer = _get_prop(tracker.index, openvr.Prop_ManufacturerName_String).lower()
+            model_number = _get_prop(tracker.index, openvr.Prop_ModelNumber_String).lower()
+            controller_type = _get_prop(tracker.index, openvr.Prop_ControllerType_String).lower()
+
+            keys = []
+            controller_side = _controller_hand_side(tracker)
+
+            if "index" in model_number or "knuckles" in controller_type or "knuckles" in model_number:
+                if controller_side:
+                    keys.append(f"vr_controller_knuckles_{controller_side}")
+
+            if "pico" in manufacturer or "pico" in model_number:
+                if controller_side:
+                    keys.append(f"pico_controller_{controller_side}")
+
+            if "tundra" in manufacturer or "tundra" in model_number:
+                keys.append("tundra_tracker")
+
+            if tracker.type == str(openvr.TrackedDeviceClass_TrackingReference):
+                keys.extend(["lh_basestation_valve_gen2", "lh_basestation_vive"])
+
+            class_model = fallback_models.get(tracker.type)
+            if class_model:
+                keys.append(class_model)
+
+            for key in dict.fromkeys(keys):
+                for model_path in model_db.get(key, []):
+                    if model_path.exists():
+                        return model_path
+
+            return None
+
+        def _get_or_import_model(path: Path) -> bpy.types.Object | None:
+            key = str(path.resolve())
+            if key in model_templates:
+                return model_templates[key]
+
+            try:
+                bpy.ops.wm.obj_import(filepath=str(path))
+            except RuntimeError:
+                return None
+
+            imported = bpy.context.object
+            if not imported:
+                return None
+
+            imported.location = (0, 0, 0)
+            imported.rotation_euler = (0, 0, 0)
+            imported.scale = (1, 1, 1)
+
+            model_templates[key] = imported
+            return imported
 
         load_trackers(ovr_context)
-
-        # Default reference transformations
-        tracker_model.location = (0, 0, 0)
-        tracker_model.rotation_euler = (0, 0, 0)
-
-        controller_model.location = (0, 0, 0)
-        controller_model.rotation_euler = (0, 0, 0)
-
-        hmd_model.location = (0, 0, 0)
-        hmd_model.rotation_euler = (0, 0, 0)
 
         # Create references
         def select_model(target_model: bpy.types.Object):
@@ -442,13 +545,12 @@ class CreateRefsOperator(bpy.types.Operator):
 
             print(">", tracker_name)
 
-            # Chose correct model
-            if tracker.type == str(openvr.TrackedDeviceClass_Controller):
-                model = controller_model
-            elif tracker.type == str(openvr.TrackedDeviceClass_HMD):
-                model = hmd_model
-            else:
-                model = tracker_model
+            model_path = _resolve_model_obj_path(tracker)
+            model = _get_or_import_model(model_path) if model_path else None
+
+            if not model:
+                print(f"Could not resolve model for {tracker_name}; skipping")
+                continue
 
             # Delete existing target
             tracker_target = bpy.data.objects.get(tracker_name)
@@ -498,10 +600,10 @@ class CreateRefsOperator(bpy.types.Operator):
             tracker_target.rotation_mode = "QUATERNION"
             tracker_joint.rotation_mode = "QUATERNION"
 
-        # Clean up
-        bpy.data.objects.remove(tracker_model)
-        bpy.data.objects.remove(controller_model)
-        bpy.data.objects.remove(hmd_model)
+        # Clean up imported template models
+        for template_obj in model_templates.values():
+            if template_obj and template_obj.name in bpy.data.objects:
+                bpy.data.objects.remove(template_obj)
 
         # Restore previous selection
         try:

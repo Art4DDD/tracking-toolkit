@@ -123,6 +123,21 @@ class RecorderPanel(View3DPanel, bpy.types.Panel):
             depress=True,
         )
 
+        # Skeletal finger debug (Knuckles)
+        layout.label(text="Skeletal Fingers")
+
+        def draw_finger_block(block_layout, title: str, input_prop):
+            box = block_layout.box()
+            box.label(text=title)
+            box.prop(input_prop, "thumb_curl", text="Thumb")
+            box.prop(input_prop, "index_curl", text="Index")
+            box.prop(input_prop, "middle_curl", text="Middle")
+            box.prop(input_prop, "ring_curl", text="Ring")
+            box.prop(input_prop, "pinky_curl", text="Pinky")
+
+        draw_finger_block(layout, "Left Hand", ovr_context.l_input)
+        draw_finger_block(layout, "Right Hand", ovr_context.r_input)
+
 
 class ArmaturePanel(View3DPanel, bpy.types.Panel):
     bl_idname = "VIEW3D_PT_openvr_armature_menu"

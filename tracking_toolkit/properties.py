@@ -94,6 +94,13 @@ class OVRInput(bpy.types.PropertyGroup):
     grip_strength: bpy.props.FloatProperty(name="Grip strength", default=0)
     trigger_strength: bpy.props.FloatProperty(name="Trigger strength", default=0)
 
+    # Finger curls (primarily for Valve Index/Knuckles; fallback estimation when unavailable)
+    thumb_curl: bpy.props.FloatProperty(name="Thumb curl", default=0, min=0, max=1)
+    index_curl: bpy.props.FloatProperty(name="Index curl", default=0, min=0, max=1)
+    middle_curl: bpy.props.FloatProperty(name="Middle curl", default=0, min=0, max=1)
+    ring_curl: bpy.props.FloatProperty(name="Ring curl", default=0, min=0, max=1)
+    pinky_curl: bpy.props.FloatProperty(name="Pinky curl", default=0, min=0, max=1)
+
     a_button: bpy.props.BoolProperty(name="A pressed", default=False)
     b_button: bpy.props.BoolProperty(name="B pressed", default=False)
 
