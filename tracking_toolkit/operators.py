@@ -4,7 +4,7 @@ from pathlib import Path
 from mathutils import Vector
 
 from .properties import Preferences, OVRTransform, OVRContext, OVRTracker
-from .tracking import load_trackers, dump_openvr_devices_to_console, start_recording, stop_recording, start_preview, stop_preview, init_handles
+from .tracking import load_trackers, start_recording, stop_recording, start_preview, stop_preview, init_handles
 from .. import __package__ as base_package
 
 
@@ -341,14 +341,6 @@ class ToggleCalibrationOperator(bpy.types.Operator):
 
 
 
-
-class DumpOpenVRDebugOperator(bpy.types.Operator):
-    bl_idname = "id.dump_openvr_debug"
-    bl_label = "Dump OpenVR devices"
-
-    def execute(self, _context):
-        dump_openvr_devices_to_console()
-        return {"FINISHED"}
 
 class ToggleActiveOperator(bpy.types.Operator):
     bl_idname = "id.toggle_active"
