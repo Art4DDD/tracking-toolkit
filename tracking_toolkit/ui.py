@@ -1,4 +1,5 @@
 import bpy
+import openvr
 from bl_ui.space_view3d_toolbar import View3DPanel
 
 from .operators import (
@@ -122,6 +123,82 @@ class RecorderPanel(View3DPanel, bpy.types.Panel):
             icon=active_record_icon,
             depress=True,
         )
+
+        # Skeletal finger debug (Knuckles)
+        layout.label(text="Skeletal Fingers")
+
+        def draw_controller_props(block_layout, title: str, controller_obj: bpy.types.Object | None):
+            box = block_layout.box()
+            box.label(text=title)
+            if not controller_obj:
+                box.label(text="Controller reference not found", icon="ERROR")
+                return
+
+            box.label(text=f"Object: {controller_obj.name}")
+            for channel, label in (
+                ("thumb_curl", "Thumb"),
+                ("index_curl", "Index"),
+                ("middle_curl", "Middle"),
+                ("ring_curl", "Ring"),
+                ("pinky_curl", "Pinky"),
+            ):
+                if channel not in controller_obj:
+                    controller_obj[channel] = 0.0
+                box.prop(controller_obj, f'["{channel}"]', text=label)
+
+        def resolve_controller_objects() -> tuple[bpy.types.Object | None, bpy.types.Object | None]:
+            left_obj = None
+            right_obj = None
+            controller_type = str(openvr.TrackedDeviceClass_Controller)
+
+            def find_existing(hand: str) -> bpy.types.Object | None:
+                hand = hand.lower()
+                candidates = {
+                    "left": ["left controller", "controller left", "controller_l", "controller.l", "left_hand", "l_hand"],
+                    "right": ["right controller", "controller right", "controller_r", "controller.r", "right_hand", "r_hand"],
+                }
+                for obj in bpy.data.objects:
+                    name = obj.name.lower()
+                    if any(token in name for token in candidates.get(hand, [])):
+                        return obj
+                return None
+
+            left_obj = find_existing("left")
+            right_obj = find_existing("right")
+
+            try:
+                system = openvr.VRSystem()
+                role_prop = openvr.Prop_ControllerRoleHint_Int32
+                left_role = getattr(openvr, "TrackedControllerRole_LeftHand", 1)
+                right_role = getattr(openvr, "TrackedControllerRole_RightHand", 2)
+
+                for tracker in ovr_context.trackers:
+                    tracker_obj = tracker.target.object or bpy.data.objects.get(tracker.name)
+                    if tracker.type != controller_type or not tracker_obj:
+                        continue
+                    try:
+                        role = system.getInt32TrackedDeviceProperty(tracker.index, role_prop)
+                    except Exception:
+                        role = None
+
+                    if role == left_role and not left_obj:
+                        left_obj = tracker_obj
+                    elif role == right_role and not right_obj:
+                        right_obj = tracker_obj
+            except Exception:
+                pass
+
+            if not left_obj:
+                left_obj = next(((t.target.object or bpy.data.objects.get(t.name)) for t in ovr_context.trackers if t.type == controller_type and "left" in t.name.lower()), None)
+            if not right_obj:
+                right_obj = next(((t.target.object or bpy.data.objects.get(t.name)) for t in ovr_context.trackers if t.type == controller_type and "right" in t.name.lower()), None)
+
+            return left_obj, right_obj
+
+        left_controller, right_controller = resolve_controller_objects()
+
+        draw_controller_props(layout, "Left Controller", left_controller)
+        draw_controller_props(layout, "Right Controller", right_controller)
 
 
 class ArmaturePanel(View3DPanel, bpy.types.Panel):

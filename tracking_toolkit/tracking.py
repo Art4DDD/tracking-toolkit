@@ -1,4 +1,5 @@
 import datetime
+import ctypes
 import queue
 import threading
 from typing import Generator
@@ -16,45 +17,123 @@ pose_queue = queue.Queue()
 polling_thread = None
 stop_thread_flag = threading.Event()
 
-data_buffer = []
+preview_buffer = []
+record_buffer = []
+input_record_buffer = []
 buffer_lock = threading.Lock()
+recording_active = False
 
 action_sets = []
 action_handles = {}
+
+FINGER_CHANNELS = ("thumb_curl", "index_curl", "middle_curl", "ring_curl", "pinky_curl")
+
+FINGER_BONE_CHAINS = {
+    "thumb": (2, 3, 4, 5),
+    "index": (6, 7, 8, 9, 10),
+    "middle": (11, 12, 13, 14, 15),
+    "ring": (16, 17, 18, 19, 20),
+    "pinky": (21, 22, 23, 24, 25),
+}
+
+
+
+def _ensure_finger_properties(target_obj: bpy.types.Object):
+    for channel in FINGER_CHANNELS:
+        if channel not in target_obj:
+            target_obj[channel] = 0.0
+
+
+def _set_action_slot_if_supported(obj: bpy.types.Object, action: bpy.types.Action):
+    slots = getattr(action, "slots", None)
+    if not slots:
+        return
+
+    if obj.animation_data is None:
+        obj.animation_data_create()
+
+    try:
+        obj.animation_data.action_slot = slots[0]
+    except Exception:
+        pass
+
+def _get_tracker_live_object(tracker: OVRTracker) -> bpy.types.Object | None:
+    if tracker.target.object:
+        return tracker.target.object
+
+    existing_obj = bpy.data.objects.get(tracker.name)
+    if existing_obj:
+        tracker.target.object = existing_obj
+        return existing_obj
+
+    return None
+
+
+def _find_existing_controller_object(hand: str) -> bpy.types.Object | None:
+    hand = hand.lower()
+    candidates = {
+        "left": ["left controller", "controller left", "controller_l", "controller.l", "left_hand", "l_hand"],
+        "right": ["right controller", "controller right", "controller_r", "controller.r", "right_hand", "r_hand"],
+    }
+
+    names = candidates.get(hand, [])
+    for obj in bpy.data.objects:
+        name = obj.name.lower()
+        if any(token in name for token in names):
+            return obj
+
+    return None
 
 
 def init_handles():
     vr_ipt = openvr.VRInput()
 
+    def _get_action_set_handle(action_set_path: str):
+        try:
+            return vr_ipt.getActionSetHandle(action_set_path)
+        except Exception:
+            return None
+
+    def _get_action_handle(action_path: str):
+        try:
+            return vr_ipt.getActionHandle(action_path)
+        except Exception:
+            return None
+
     global action_sets
+    action_set_handle = _get_action_set_handle("/actions/default")
     action_sets = (openvr.VRActiveActionSet_t * 1)()
-    action_set = action_sets[0]
-    action_set.ulActionSet = vr_ipt.getActionSetHandle("/actions/legacy")
+    action_sets[0].ulActionSet = action_set_handle or 0
 
     global action_handles
     action_handles = {
-        "l_joystick": vr_ipt.getActionHandle("/actions/legacy/in/Left_Axis0_Value"),
-        "r_joystick": vr_ipt.getActionHandle("/actions/legacy/in/Right_Axis1_Value"),
-
-        "l_trigger": vr_ipt.getActionHandle("/actions/legacy/in/Left_Axis1_Value"),
-        "r_trigger": vr_ipt.getActionHandle("/actions/legacy/in/Right_Axis1_Value"),
-
-        "l_grip": vr_ipt.getActionHandle("/actions/legacy/in/Left_Axis2_Value"),
-        "r_grip": vr_ipt.getActionHandle("/actions/legacy/in/Right_Axis2_Value"),
-
-        "r_a": vr_ipt.getActionHandle("/actions/legacy/in/Right_A_Press"),
-        "l_a": vr_ipt.getActionHandle("/actions/legacy/in/Left_A_Press"),
-
-        "l_b": vr_ipt.getActionHandle("/actions/legacy/in/Left_ApplicationMenu_Press"),
-        "r_b": vr_ipt.getActionHandle("/actions/legacy/in/Right_ApplicationMenu_Press")
+        "l_skeleton": _get_action_handle("/actions/default/in/SkeletonLeftHand"),
+        "r_skeleton": _get_action_handle("/actions/default/in/SkeletonRightHand"),
     }
 
-    print("Initialized OpenVR action handles")
+    print("Initialized OpenVR skeletal action handles")
 
 
 def _handle_input(ovr_context: OVRContext):
-    l_ipt = ovr_context.l_input
-    r_ipt = ovr_context.r_input
+    controller_targets = _resolve_controller_targets(ovr_context)
+
+    left_obj = controller_targets.get("left")
+    if left_obj:
+        _ensure_finger_properties(left_obj)
+        left_obj["thumb_curl"] = ovr_context.l_input.thumb_curl
+        left_obj["index_curl"] = ovr_context.l_input.index_curl
+        left_obj["middle_curl"] = ovr_context.l_input.middle_curl
+        left_obj["ring_curl"] = ovr_context.l_input.ring_curl
+        left_obj["pinky_curl"] = ovr_context.l_input.pinky_curl
+
+    right_obj = controller_targets.get("right")
+    if right_obj:
+        _ensure_finger_properties(right_obj)
+        right_obj["thumb_curl"] = ovr_context.r_input.thumb_curl
+        right_obj["index_curl"] = ovr_context.r_input.index_curl
+        right_obj["middle_curl"] = ovr_context.r_input.middle_curl
+        right_obj["ring_curl"] = ovr_context.r_input.ring_curl
+        right_obj["pinky_curl"] = ovr_context.r_input.pinky_curl
 
 
 def _get_input(ovr_context: OVRContext):
@@ -65,27 +144,227 @@ def _get_input(ovr_context: OVRContext):
     l_ipt: OVRInput = ovr_context.l_input
     r_ipt: OVRInput = ovr_context.r_input
 
-    vr_ipt.updateActionState(action_sets)
+    updated = False
+    update_variants = [
+        lambda: vr_ipt.updateActionState(action_sets, ctypes.sizeof(openvr.VRActiveActionSet_t), len(action_sets)),
+        lambda: vr_ipt.updateActionState(action_sets),
+        lambda: vr_ipt.updateActionState(action_sets[0], ctypes.sizeof(openvr.VRActiveActionSet_t), 1),
+    ]
 
-    def _make_vector(action_data):
-        return action_data.x, action_data.x
+    for update_call in update_variants:
+        try:
+            update_call()
+            updated = True
+            break
+        except Exception:
+            continue
 
-    # Axis values
-    l_ipt.joystick_position = _make_vector(vr_ipt.getAnalogActionData(action_handles["l_joystick"], 0))
-    r_ipt.joystick_position = _make_vector(vr_ipt.getAnalogActionData(action_handles["r_joystick"], 0))
+    if not updated:
+        return
 
-    l_ipt.trigger_strength = vr_ipt.getAnalogActionData(action_handles["l_trigger"], 0).x
-    r_ipt.trigger_strength = vr_ipt.getAnalogActionData(action_handles["r_trigger"], 0).x
+    def _calc_finger_curl(bone_transforms, chain: tuple[int, ...]) -> float:
+        if len(chain) < 2:
+            return 0.0
 
-    # l_ipt.grip_strength = vr_ipt.getAnalogActionData(action_handles["l_grip"], 0).x
-    # r_ipt.grip_strength = vr_ipt.getAnalogActionData(action_handles["r_grip"], 0).x
+        curls = []
+        for i in range(len(chain) - 1):
+            parent_idx = chain[i]
+            child_idx = chain[i + 1]
+            parent = bone_transforms[parent_idx]
+            child = bone_transforms[child_idx]
 
-    l_ipt.a_button = vr_ipt.getDigitalActionData(action_handles["l_a"], 0).bState
-    r_ipt.a_button = vr_ipt.getDigitalActionData(action_handles["r_a"], 0).bState
+            pv = parent.position.v
+            cv = child.position.v
+            vec = (cv[0] - pv[0], cv[1] - pv[1], cv[2] - pv[2])
+            length = (vec[0] ** 2 + vec[1] ** 2 + vec[2] ** 2) ** 0.5
+            if length <= 1e-6:
+                continue
 
-    l_ipt.b_button = vr_ipt.getDigitalActionData(action_handles["l_b"], 0).bState
-    r_ipt.b_button = vr_ipt.getDigitalActionData(action_handles["r_b"], 0).bState
+            forward = vec[1] / length
+            curl = max(0.0, min(1.0, (1.0 - forward) * 0.5))
+            curls.append(curl)
 
+        if not curls:
+            return 0.0
+
+        return sum(curls) / len(curls)
+
+    def _get_skeletal_finger_curls(action_key: str) -> dict[str, float] | None:
+        action = action_handles.get(action_key)
+        if action is None:
+            return None
+
+        get_action_data_fn = getattr(vr_ipt, "getSkeletalActionData", None) or getattr(vr_ipt, "GetSkeletalActionData", None)
+        if not get_action_data_fn:
+            return None
+
+        try:
+            action_data = get_action_data_fn(action)
+        except Exception:
+            return None
+
+        if not getattr(action_data, "bActive", False):
+            return None
+
+        # 1) Preferred path: skeletal summary already contains per-finger curls.
+        get_summary_fn = getattr(vr_ipt, "getSkeletalSummaryData", None) or getattr(vr_ipt, "GetSkeletalSummaryData", None)
+        summary = None
+        if get_summary_fn:
+            summary_data_t = getattr(openvr, "InputSkeletalSummaryData_t", None)
+            summary_type = getattr(openvr, "VRSummaryType_FromDevice", 1)
+
+            summary_variants = [
+                lambda: get_summary_fn(action),
+                lambda: get_summary_fn(action, summary_type),
+            ]
+            if summary_data_t:
+                summary_variants.extend([
+                    lambda: get_summary_fn(action, summary_data_t()),
+                    lambda: get_summary_fn(action, summary_type, summary_data_t()),
+                ])
+
+            for summary_call in summary_variants:
+                try:
+                    summary = summary_call()
+                    break
+                except Exception:
+                    continue
+
+        if isinstance(summary, tuple) and len(summary) >= 1:
+            summary = summary[0]
+
+        if summary is not None:
+            curls = getattr(summary, "flFingerCurl", None) or getattr(summary, "fingerCurl", None)
+            if curls and len(curls) >= 5:
+                return {
+                    "thumb": float(curls[0]),
+                    "index": float(curls[1]),
+                    "middle": float(curls[2]),
+                    "ring": float(curls[3]),
+                    "pinky": float(curls[4]),
+                }
+
+        # 2) Fallback path: estimate curls from skeletal bone transforms.
+        get_bone_data_fn = getattr(vr_ipt, "getSkeletalBoneData", None) or getattr(vr_ipt, "GetSkeletalBoneData", None)
+        if not get_bone_data_fn:
+            return None
+
+        transform_space = getattr(openvr, "VRSkeletalTransformSpace_Model", 0)
+        motion_range = getattr(openvr, "VRSkeletalMotionRange_WithController", 0)
+        bone_count = getattr(openvr, "k_unSkeletonBoneCount", 31)
+
+        bone_transforms = None
+        bone_variants = [
+            lambda: get_bone_data_fn(action, transform_space, motion_range),
+            lambda: get_bone_data_fn(action, transform_space, motion_range, bone_count),
+            lambda: get_bone_data_fn(action, transform_space, motion_range, None, bone_count),
+        ]
+
+        for bone_call in bone_variants:
+            try:
+                bone_transforms = bone_call()
+                break
+            except Exception:
+                continue
+
+        if isinstance(bone_transforms, tuple) and len(bone_transforms) >= 1:
+            bone_transforms = bone_transforms[0]
+
+        if not bone_transforms:
+            return None
+
+        result = {}
+        for finger_name, chain in FINGER_BONE_CHAINS.items():
+            valid_chain = tuple(idx for idx in chain if idx < len(bone_transforms))
+            result[finger_name] = _calc_finger_curl(bone_transforms, valid_chain)
+
+        return result
+
+    l_skeletal = _get_skeletal_finger_curls("l_skeleton")
+    if l_skeletal:
+        l_ipt.thumb_curl = l_skeletal["thumb"]
+        l_ipt.index_curl = l_skeletal["index"]
+        l_ipt.middle_curl = l_skeletal["middle"]
+        l_ipt.ring_curl = l_skeletal["ring"]
+        l_ipt.pinky_curl = l_skeletal["pinky"]
+
+    r_skeletal = _get_skeletal_finger_curls("r_skeleton")
+    if r_skeletal:
+        r_ipt.thumb_curl = r_skeletal["thumb"]
+        r_ipt.index_curl = r_skeletal["index"]
+        r_ipt.middle_curl = r_skeletal["middle"]
+        r_ipt.ring_curl = r_skeletal["ring"]
+        r_ipt.pinky_curl = r_skeletal["pinky"]
+
+
+
+
+def _snapshot_input_state(ovr_context: OVRContext):
+    l_ipt: OVRInput = ovr_context.l_input
+    r_ipt: OVRInput = ovr_context.r_input
+
+    return datetime.datetime.now(), {
+        "left": {
+            "thumb_curl": l_ipt.thumb_curl,
+            "index_curl": l_ipt.index_curl,
+            "middle_curl": l_ipt.middle_curl,
+            "ring_curl": l_ipt.ring_curl,
+            "pinky_curl": l_ipt.pinky_curl,
+        },
+        "right": {
+            "thumb_curl": r_ipt.thumb_curl,
+            "index_curl": r_ipt.index_curl,
+            "middle_curl": r_ipt.middle_curl,
+            "ring_curl": r_ipt.ring_curl,
+            "pinky_curl": r_ipt.pinky_curl,
+        },
+    }
+
+
+def _resolve_controller_targets(ovr_context: OVRContext) -> dict[str, bpy.types.Object]:
+    system = openvr.VRSystem()
+
+    role_prop = openvr.Prop_ControllerRoleHint_Int32
+    left_role = getattr(openvr, "TrackedControllerRole_LeftHand", 1)
+    right_role = getattr(openvr, "TrackedControllerRole_RightHand", 2)
+
+    # Prefer already existing scene controller objects (not autogenerated LHR-* refs)
+    targets = {
+        "left": _find_existing_controller_object("left"),
+        "right": _find_existing_controller_object("right"),
+    }
+    targets = {k: v for k, v in targets.items() if v is not None}
+
+    unresolved = []
+    for tracker in ovr_context.trackers:
+        if tracker.type != str(openvr.TrackedDeviceClass_Controller):
+            continue
+
+        target_obj = _get_tracker_live_object(tracker)
+        if not target_obj:
+            continue
+
+        try:
+            role = system.getInt32TrackedDeviceProperty(tracker.index, role_prop)
+        except Exception:
+            role = None
+
+        if role == left_role and "left" not in targets:
+            targets["left"] = target_obj
+        elif role == right_role and "right" not in targets:
+            targets["right"] = target_obj
+        else:
+            unresolved.append((tracker, target_obj))
+
+    if "left" not in targets or "right" not in targets:
+        for tracker, target_obj in unresolved:
+            tracker_name = tracker.name.lower()
+            if "left" not in targets and ("left" in tracker_name or "_l" in tracker_name or tracker_name.endswith(".l")):
+                targets["left"] = target_obj
+            elif "right" not in targets and ("right" in tracker_name or "_r" in tracker_name or tracker_name.endswith(".r")):
+                targets["right"] = target_obj
+
+    return targets
 
 def _get_poses(ovr_context: OVRContext) -> Generator[tuple[datetime.datetime, OVRTracker, Matrix], None, None]:
     system = openvr.VRSystem()
@@ -102,16 +381,16 @@ def _get_poses(ovr_context: OVRContext) -> Generator[tuple[datetime.datetime, OV
         mat_world = bpy_extras.io_utils.axis_conversion("Z", "Y", "Y", "Z").to_4x4()
         mat_world = mat_world @ mat
 
-        # Apply scale
+        # Apply scale (use axis scale value directly; length of (1,1,1) is 1.732 and inflates transforms)
         root = bpy.data.objects.get("OVR Root")
         if root:
-            mat_world = mat_world @ Matrix.Scale(root.scale.length, 4)
+            mat_world = mat_world @ Matrix.Scale(root.scale.x, 4)
 
         yield time, tracker, mat_world
 
 
 def _openvr_poll_thread_func(ovr_context: OVRContext):
-    global pose_queue, stop_thread_flag, data_buffer, buffer_lock
+    global pose_queue, stop_thread_flag, preview_buffer, record_buffer, input_record_buffer, buffer_lock, recording_active
 
     while not stop_thread_flag.is_set():
         pose_chunk = []
@@ -119,34 +398,54 @@ def _openvr_poll_thread_func(ovr_context: OVRContext):
             pose_chunk.append(pose_data)
 
         with buffer_lock:
-            data_buffer.append(pose_chunk)
+            preview_buffer.append(pose_chunk)
+            if len(preview_buffer) > 2:
+                preview_buffer.pop(0)
 
-        #_get_input(ovr_context)
-        #_handle_input(ovr_context)
+            if recording_active:
+                record_buffer.append(pose_chunk)
+
+        _get_input(ovr_context)
+        _handle_input(ovr_context)
+
+        if recording_active:
+            input_sample = _snapshot_input_state(ovr_context)
+            with buffer_lock:
+                input_record_buffer.append(input_sample)
 
 
 def _clear_buffer():
-    global data_buffer, buffer_lock
+    global record_buffer, input_record_buffer, buffer_lock
     with buffer_lock:
-        data_buffer.clear()
+        record_buffer.clear()
+        input_record_buffer.clear()
 
 
 def _get_buffer() -> list[list[tuple[datetime.datetime, OVRTracker, Matrix]]]:
-    global data_buffer, buffer_lock
+    global record_buffer, buffer_lock
 
     with buffer_lock:
-        buffer_copy = data_buffer.copy()
+        buffer_copy = record_buffer.copy()
 
     return buffer_copy
 
 
-def _get_latest_poses() -> list[tuple[datetime.datetime, OVRTracker, Matrix]] | None:
-    global data_buffer, buffer_lock
+
+def _get_input_buffer() -> list[tuple[datetime.datetime, dict[str, dict[str, float]]]]:
+    global input_record_buffer, buffer_lock
+
     with buffer_lock:
-        if len(data_buffer) == 0:
+        buffer_copy = input_record_buffer.copy()
+
+    return buffer_copy
+
+def _get_latest_poses() -> list[tuple[datetime.datetime, OVRTracker, Matrix]] | None:
+    global preview_buffer, buffer_lock
+    with buffer_lock:
+        if len(preview_buffer) == 0:
             return None
 
-    return data_buffer[-1]
+        return preview_buffer[-1]
 
 
 def _apply_poses():
@@ -164,7 +463,6 @@ def _apply_poses():
             continue
 
         tracker_obj.matrix_world = pose
-        tracker_obj.scale = (1, 1, 1)
 
 
 def _pose_vis_timer():
@@ -174,13 +472,20 @@ def _pose_vis_timer():
 
 def _insert_action(ovr_context: OVRContext):
     pose_data = _get_buffer()
-    num_samples = len(pose_data)
-    print(f"OpenVR Processing {num_samples} recorded samples")
-    if num_samples == 0:
+    input_data = _get_input_buffer()
+
+    num_pose_samples = len(pose_data)
+    num_input_samples = len(input_data)
+    print(f"OpenVR Processing {num_pose_samples} pose samples and {num_input_samples} finger samples")
+
+    if num_pose_samples == 0 and num_input_samples == 0:
         print(f"OpenVR Found no samples to process")
         return
 
-    take_start_time = pose_data[0][0][0]
+    if num_pose_samples > 0:
+        take_start_time = pose_data[0][0][0]
+    else:
+        take_start_time = input_data[0][0]
     framerate = bpy.context.scene.render.fps / bpy.context.scene.render.fps_base
     start_frame = ovr_context.record_start_frame
 
@@ -200,15 +505,14 @@ def _insert_action(ovr_context: OVRContext):
                     "obj": tracker_obj,
                     "frames": [],
                     "locs": [],
-                    "rots": [],
-                    "scales": []
+                    "rots": []
                 }
 
             time_delta = time - take_start_time
             frame = start_frame + time_delta.total_seconds() * framerate
 
-            # получаем лок, рот, скейл из матрицы
-            loc, rot, scale = pose.decompose()
+            # получаем лок и рот из матрицы (scale не используем для производительности)
+            loc, rot, _ = pose.decompose()
 
             # -----------------------------
             # СТАБИЛИЗАЦИЯ QUATERNION
@@ -229,7 +533,6 @@ def _insert_action(ovr_context: OVRContext):
             data["frames"].append(frame)
             data["locs"].extend(loc)
             data["rots"].extend(rot)
-            data["scales"].extend(scale)
 
 
     # Now insert or replace the data
@@ -252,8 +555,7 @@ def _insert_action(ovr_context: OVRContext):
         # Map the F-Curve data_path and array_index to our collected data.
         fcurve_props = [
             ("location", 3, data["locs"]),
-            ("rotation_quaternion", 4, data["rots"]),
-            ("scale", 3, data["scales"])
+            ("rotation_quaternion", 4, data["rots"])
         ]
 
         for data_path, num_components, values in fcurve_props:
@@ -287,19 +589,75 @@ def _insert_action(ovr_context: OVRContext):
 
         # Select first action slot
         # Otherwise, the new keyframes will not show
-        action_slot = action.slots[0]
-        tracker_obj.animation_data.action_slot = action_slot
+        _set_action_slot_if_supported(tracker_obj, action)
+
+    if num_input_samples > 0:
+        controller_targets = _resolve_controller_targets(ovr_context)
+        input_frames = []
+        hand_channel_values = {
+            "left": {channel: [] for channel in FINGER_CHANNELS},
+            "right": {channel: [] for channel in FINGER_CHANNELS},
+        }
+
+        for sample_time, sample_values in input_data:
+            time_delta = sample_time - take_start_time
+            frame = start_frame + time_delta.total_seconds() * framerate
+            input_frames.append(frame)
+
+            for hand in ("left", "right"):
+                hand_values = sample_values.get(hand, {})
+                for channel in FINGER_CHANNELS:
+                    hand_channel_values[hand][channel].append(hand_values.get(channel, 0.0))
+
+        for hand, target_obj in controller_targets.items():
+            if target_obj.animation_data is None:
+                target_obj.animation_data_create()
+
+            action = target_obj.animation_data.action
+            if not action:
+                action = bpy.data.actions.new(name=f"{target_obj.name}_Input_Action")
+                target_obj.animation_data.action = action
+
+            _ensure_finger_properties(target_obj)
+            for channel in FINGER_CHANNELS:
+
+                data_path = f'["{channel}"]'
+
+                fcurve = action.fcurves.find(data_path, index=0)
+                if fcurve:
+                    action.fcurves.remove(fcurve)
+                fcurve = action.fcurves.new(data_path, index=0)
+                fcurve.keyframe_points.add(len(input_frames))
+
+                values = hand_channel_values[hand][channel]
+
+                key_coords = [0.0] * (len(input_frames) * 2)
+                key_coords[0::2] = input_frames
+                key_coords[1::2] = values
+                fcurve.keyframe_points.foreach_set("co", key_coords)
+                fcurve.update()
+
+                if values:
+                    target_obj[channel] = values[-1]
+
+            _set_action_slot_if_supported(target_obj, action)
 
     print("Done")
 
 
 def start_recording():
+    global recording_active
+
     _clear_buffer()
+    recording_active = True
 
     print("OpenVR Recording Started")
 
 
 def stop_recording(ovr_context: OVRContext | None):
+    global recording_active
+
+    recording_active = False
     stop_preview()
     _insert_action(ovr_context)
     _clear_buffer()
@@ -309,7 +667,11 @@ def stop_recording(ovr_context: OVRContext | None):
 
 
 def start_preview(ovr_context: OVRContext):
-    global polling_thread, stop_thread_flag, data_buffer, buffer_lock
+    global polling_thread, stop_thread_flag
+
+    if polling_thread and polling_thread.is_alive():
+        stop_thread_flag.set()
+        polling_thread.join()
 
     stop_thread_flag.clear()
     polling_thread = threading.Thread(target=lambda: _openvr_poll_thread_func(ovr_context))
@@ -323,7 +685,7 @@ def start_preview(ovr_context: OVRContext):
 
 
 def stop_preview():
-    global polling_thread, stop_thread_flag
+    global polling_thread, stop_thread_flag, preview_buffer
 
     if bpy.app.timers.is_registered(_pose_vis_timer):
         bpy.app.timers.unregister(_pose_vis_timer)
@@ -332,10 +694,14 @@ def stop_preview():
         stop_thread_flag.set()
         polling_thread.join()
 
+    with buffer_lock:
+        preview_buffer.clear()
+
     polling_thread = None
     stop_thread_flag.clear()
 
     print("OpenVR Preview Stopped")
+
 
 
 def load_trackers(ovr_context: OVRContext):
