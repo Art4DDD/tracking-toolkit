@@ -171,7 +171,6 @@ def _apply_poses():
             continue
 
         tracker_obj.matrix_world = pose
-        tracker_obj.scale = (1, 1, 1)
 
 
 def _pose_vis_timer():
@@ -207,15 +206,14 @@ def _insert_action(ovr_context: OVRContext):
                     "obj": tracker_obj,
                     "frames": [],
                     "locs": [],
-                    "rots": [],
-                    "scales": []
+                    "rots": []
                 }
 
             time_delta = time - take_start_time
             frame = start_frame + time_delta.total_seconds() * framerate
 
-            # получаем лок, рот, скейл из матрицы
-            loc, rot, scale = pose.decompose()
+            # получаем лок и рот из матрицы (scale не используем для производительности)
+            loc, rot, _ = pose.decompose()
 
             # -----------------------------
             # СТАБИЛИЗАЦИЯ QUATERNION
@@ -236,7 +234,6 @@ def _insert_action(ovr_context: OVRContext):
             data["frames"].append(frame)
             data["locs"].extend(loc)
             data["rots"].extend(rot)
-            data["scales"].extend(scale)
 
 
     # Now insert or replace the data
@@ -259,8 +256,7 @@ def _insert_action(ovr_context: OVRContext):
         # Map the F-Curve data_path and array_index to our collected data.
         fcurve_props = [
             ("location", 3, data["locs"]),
-            ("rotation_quaternion", 4, data["rots"]),
-            ("scale", 3, data["scales"])
+            ("rotation_quaternion", 4, data["rots"])
         ]
 
         for data_path, num_components, values in fcurve_props:
