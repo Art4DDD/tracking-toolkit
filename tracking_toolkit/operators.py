@@ -509,13 +509,15 @@ class CreateRefsOperator(bpy.types.Operator):
             if render_model_name:
                 keys.append(render_model_name)
 
-            if "index" in model_number or "knuckles" in controller_type or "knuckles" in model_number:
-                if controller_side:
-                    keys.append(f"vr_controller_knuckles_{controller_side}")
+            is_pico = "pico" in manufacturer or "pico" in model_number or "pico" in render_model_name
 
-            if "pico" in manufacturer or "pico" in model_number:
+            if is_pico:
                 if controller_side:
                     keys.append(f"pico_controller_{controller_side}")
+
+            if ("index" in model_number or "knuckles" in controller_type or "knuckles" in model_number) and not is_pico:
+                if controller_side:
+                    keys.append(f"vr_controller_knuckles_{controller_side}")
 
             if "tundra" in manufacturer or "tundra" in model_number:
                 keys.append("tundra_tracker")
