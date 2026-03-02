@@ -16,8 +16,10 @@ pose_queue = queue.Queue()
 polling_thread = None
 stop_thread_flag = threading.Event()
 
-data_buffer = []
+preview_buffer = []
+record_buffer = []
 buffer_lock = threading.Lock()
+recording_active = False
 
 action_sets = []
 action_handles = {}
@@ -102,16 +104,16 @@ def _get_poses(ovr_context: OVRContext) -> Generator[tuple[datetime.datetime, OV
         mat_world = bpy_extras.io_utils.axis_conversion("Z", "Y", "Y", "Z").to_4x4()
         mat_world = mat_world @ mat
 
-        # Apply scale
+        # Apply scale (use axis scale value directly; length of (1,1,1) is 1.732 and inflates transforms)
         root = bpy.data.objects.get("OVR Root")
         if root:
-            mat_world = mat_world @ Matrix.Scale(root.scale.length, 4)
+            mat_world = mat_world @ Matrix.Scale(root.scale.x, 4)
 
         yield time, tracker, mat_world
 
 
 def _openvr_poll_thread_func(ovr_context: OVRContext):
-    global pose_queue, stop_thread_flag, data_buffer, buffer_lock
+    global pose_queue, stop_thread_flag, preview_buffer, record_buffer, buffer_lock, recording_active
 
     while not stop_thread_flag.is_set():
         pose_chunk = []
@@ -119,34 +121,39 @@ def _openvr_poll_thread_func(ovr_context: OVRContext):
             pose_chunk.append(pose_data)
 
         with buffer_lock:
-            data_buffer.append(pose_chunk)
+            preview_buffer.append(pose_chunk)
+            if len(preview_buffer) > 2:
+                preview_buffer.pop(0)
+
+            if recording_active:
+                record_buffer.append(pose_chunk)
 
         #_get_input(ovr_context)
         #_handle_input(ovr_context)
 
 
 def _clear_buffer():
-    global data_buffer, buffer_lock
+    global record_buffer, buffer_lock
     with buffer_lock:
-        data_buffer.clear()
+        record_buffer.clear()
 
 
 def _get_buffer() -> list[list[tuple[datetime.datetime, OVRTracker, Matrix]]]:
-    global data_buffer, buffer_lock
+    global record_buffer, buffer_lock
 
     with buffer_lock:
-        buffer_copy = data_buffer.copy()
+        buffer_copy = record_buffer.copy()
 
     return buffer_copy
 
 
 def _get_latest_poses() -> list[tuple[datetime.datetime, OVRTracker, Matrix]] | None:
-    global data_buffer, buffer_lock
+    global preview_buffer, buffer_lock
     with buffer_lock:
-        if len(data_buffer) == 0:
+        if len(preview_buffer) == 0:
             return None
 
-    return data_buffer[-1]
+        return preview_buffer[-1]
 
 
 def _apply_poses():
@@ -164,7 +171,6 @@ def _apply_poses():
             continue
 
         tracker_obj.matrix_world = pose
-        tracker_obj.scale = (1, 1, 1)
 
 
 def _pose_vis_timer():
@@ -200,15 +206,14 @@ def _insert_action(ovr_context: OVRContext):
                     "obj": tracker_obj,
                     "frames": [],
                     "locs": [],
-                    "rots": [],
-                    "scales": []
+                    "rots": []
                 }
 
             time_delta = time - take_start_time
             frame = start_frame + time_delta.total_seconds() * framerate
 
-            # получаем лок, рот, скейл из матрицы
-            loc, rot, scale = pose.decompose()
+            # получаем лок и рот из матрицы (scale не используем для производительности)
+            loc, rot, _ = pose.decompose()
 
             # -----------------------------
             # СТАБИЛИЗАЦИЯ QUATERNION
@@ -229,7 +234,6 @@ def _insert_action(ovr_context: OVRContext):
             data["frames"].append(frame)
             data["locs"].extend(loc)
             data["rots"].extend(rot)
-            data["scales"].extend(scale)
 
 
     # Now insert or replace the data
@@ -252,8 +256,7 @@ def _insert_action(ovr_context: OVRContext):
         # Map the F-Curve data_path and array_index to our collected data.
         fcurve_props = [
             ("location", 3, data["locs"]),
-            ("rotation_quaternion", 4, data["rots"]),
-            ("scale", 3, data["scales"])
+            ("rotation_quaternion", 4, data["rots"])
         ]
 
         for data_path, num_components, values in fcurve_props:
@@ -294,12 +297,18 @@ def _insert_action(ovr_context: OVRContext):
 
 
 def start_recording():
+    global recording_active
+
     _clear_buffer()
+    recording_active = True
 
     print("OpenVR Recording Started")
 
 
 def stop_recording(ovr_context: OVRContext | None):
+    global recording_active
+
+    recording_active = False
     stop_preview()
     _insert_action(ovr_context)
     _clear_buffer()
@@ -309,7 +318,11 @@ def stop_recording(ovr_context: OVRContext | None):
 
 
 def start_preview(ovr_context: OVRContext):
-    global polling_thread, stop_thread_flag, data_buffer, buffer_lock
+    global polling_thread, stop_thread_flag
+
+    if polling_thread and polling_thread.is_alive():
+        stop_thread_flag.set()
+        polling_thread.join()
 
     stop_thread_flag.clear()
     polling_thread = threading.Thread(target=lambda: _openvr_poll_thread_func(ovr_context))
@@ -323,7 +336,7 @@ def start_preview(ovr_context: OVRContext):
 
 
 def stop_preview():
-    global polling_thread, stop_thread_flag
+    global polling_thread, stop_thread_flag, preview_buffer
 
     if bpy.app.timers.is_registered(_pose_vis_timer):
         bpy.app.timers.unregister(_pose_vis_timer)
@@ -331,6 +344,9 @@ def stop_preview():
     if polling_thread and polling_thread.is_alive():
         stop_thread_flag.set()
         polling_thread.join()
+
+    with buffer_lock:
+        preview_buffer.clear()
 
     polling_thread = None
     stop_thread_flag.clear()
