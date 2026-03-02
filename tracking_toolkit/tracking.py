@@ -19,6 +19,7 @@ stop_thread_flag = threading.Event()
 
 preview_buffer = []
 record_buffer = []
+input_record_buffer = []
 buffer_lock = threading.Lock()
 recording_active = False
 
@@ -230,6 +231,24 @@ def _get_input(ovr_context: OVRContext):
 
 
 
+
+def _snapshot_input_state(ovr_context: OVRContext):
+    l_ipt: OVRInput = ovr_context.l_input
+    r_ipt: OVRInput = ovr_context.r_input
+
+    return datetime.datetime.now(), {
+        "OVRContext.l_input.thumb_curl": l_ipt.thumb_curl,
+        "OVRContext.l_input.index_curl": l_ipt.index_curl,
+        "OVRContext.l_input.middle_curl": l_ipt.middle_curl,
+        "OVRContext.l_input.ring_curl": l_ipt.ring_curl,
+        "OVRContext.l_input.pinky_curl": l_ipt.pinky_curl,
+        "OVRContext.r_input.thumb_curl": r_ipt.thumb_curl,
+        "OVRContext.r_input.index_curl": r_ipt.index_curl,
+        "OVRContext.r_input.middle_curl": r_ipt.middle_curl,
+        "OVRContext.r_input.ring_curl": r_ipt.ring_curl,
+        "OVRContext.r_input.pinky_curl": r_ipt.pinky_curl,
+    }
+
 def _get_poses(ovr_context: OVRContext) -> Generator[tuple[datetime.datetime, OVRTracker, Matrix], None, None]:
     system = openvr.VRSystem()
     poses, _ = openvr.VRCompositor().waitGetPoses([], None)
@@ -254,7 +273,7 @@ def _get_poses(ovr_context: OVRContext) -> Generator[tuple[datetime.datetime, OV
 
 
 def _openvr_poll_thread_func(ovr_context: OVRContext):
-    global pose_queue, stop_thread_flag, preview_buffer, record_buffer, buffer_lock, recording_active
+    global pose_queue, stop_thread_flag, preview_buffer, record_buffer, input_record_buffer, buffer_lock, recording_active
 
     while not stop_thread_flag.is_set():
         pose_chunk = []
@@ -272,11 +291,17 @@ def _openvr_poll_thread_func(ovr_context: OVRContext):
         _get_input(ovr_context)
         _handle_input(ovr_context)
 
+        if recording_active:
+            input_sample = _snapshot_input_state(ovr_context)
+            with buffer_lock:
+                input_record_buffer.append(input_sample)
+
 
 def _clear_buffer():
-    global record_buffer, buffer_lock
+    global record_buffer, input_record_buffer, buffer_lock
     with buffer_lock:
         record_buffer.clear()
+        input_record_buffer.clear()
 
 
 def _get_buffer() -> list[list[tuple[datetime.datetime, OVRTracker, Matrix]]]:
@@ -287,6 +312,15 @@ def _get_buffer() -> list[list[tuple[datetime.datetime, OVRTracker, Matrix]]]:
 
     return buffer_copy
 
+
+
+def _get_input_buffer() -> list[tuple[datetime.datetime, dict[str, float]]]:
+    global input_record_buffer, buffer_lock
+
+    with buffer_lock:
+        buffer_copy = input_record_buffer.copy()
+
+    return buffer_copy
 
 def _get_latest_poses() -> list[tuple[datetime.datetime, OVRTracker, Matrix]] | None:
     global preview_buffer, buffer_lock
@@ -321,13 +355,20 @@ def _pose_vis_timer():
 
 def _insert_action(ovr_context: OVRContext):
     pose_data = _get_buffer()
-    num_samples = len(pose_data)
-    print(f"OpenVR Processing {num_samples} recorded samples")
-    if num_samples == 0:
+    input_data = _get_input_buffer()
+
+    num_pose_samples = len(pose_data)
+    num_input_samples = len(input_data)
+    print(f"OpenVR Processing {num_pose_samples} pose samples and {num_input_samples} finger samples")
+
+    if num_pose_samples == 0 and num_input_samples == 0:
         print(f"OpenVR Found no samples to process")
         return
 
-    take_start_time = pose_data[0][0][0]
+    if num_pose_samples > 0:
+        take_start_time = pose_data[0][0][0]
+    else:
+        take_start_time = input_data[0][0]
     framerate = bpy.context.scene.render.fps / bpy.context.scene.render.fps_base
     start_frame = ovr_context.record_start_frame
 
@@ -433,6 +474,50 @@ def _insert_action(ovr_context: OVRContext):
         # Otherwise, the new keyframes will not show
         action_slot = action.slots[0]
         tracker_obj.animation_data.action_slot = action_slot
+
+    if num_input_samples > 0:
+        scene = bpy.context.scene
+        if not scene.animation_data:
+            scene.animation_data_create()
+
+        input_action = scene.animation_data.action
+        if not input_action:
+            input_action = bpy.data.actions.new(name="OVR_Input_Action")
+            scene.animation_data.action = input_action
+
+        input_channels = {
+            "OVRContext.l_input.thumb_curl": [],
+            "OVRContext.l_input.index_curl": [],
+            "OVRContext.l_input.middle_curl": [],
+            "OVRContext.l_input.ring_curl": [],
+            "OVRContext.l_input.pinky_curl": [],
+            "OVRContext.r_input.thumb_curl": [],
+            "OVRContext.r_input.index_curl": [],
+            "OVRContext.r_input.middle_curl": [],
+            "OVRContext.r_input.ring_curl": [],
+            "OVRContext.r_input.pinky_curl": [],
+        }
+        input_frames = []
+
+        for sample_time, sample_values in input_data:
+            time_delta = sample_time - take_start_time
+            frame = start_frame + time_delta.total_seconds() * framerate
+            input_frames.append(frame)
+            for channel_path in input_channels:
+                input_channels[channel_path].append(sample_values.get(channel_path, 0.0))
+
+        for data_path, values in input_channels.items():
+            fcurve = input_action.fcurves.find(data_path, index=0)
+            if fcurve:
+                input_action.fcurves.remove(fcurve)
+            fcurve = input_action.fcurves.new(data_path, index=0)
+            fcurve.keyframe_points.add(len(input_frames))
+
+            key_coords = [0.0] * (len(input_frames) * 2)
+            key_coords[0::2] = input_frames
+            key_coords[1::2] = values
+            fcurve.keyframe_points.foreach_set("co", key_coords)
+            fcurve.update()
 
     print("Done")
 
