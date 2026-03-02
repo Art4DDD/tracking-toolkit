@@ -72,8 +72,8 @@ def _get_tracker_live_object(tracker: OVRTracker) -> bpy.types.Object | None:
 def _find_existing_controller_object(hand: str) -> bpy.types.Object | None:
     hand = hand.lower()
     candidates = {
-        "left": ["left controller", "controller left", "controller_l", "controller.l", "left_hand", "l_hand"],
-        "right": ["right controller", "controller right", "controller_r", "controller.r", "right_hand", "r_hand"],
+        "left": ["left controller", "controller left", "controller_l", "controller.l", "left_hand", "l_hand", "index left", "knuckles left"],
+        "right": ["right controller", "controller right", "controller_r", "controller.r", "right_hand", "r_hand", "index right", "knuckles right"],
     }
 
     names = candidates.get(hand, [])
@@ -85,6 +85,11 @@ def _find_existing_controller_object(hand: str) -> bpy.types.Object | None:
     return None
 
 
+
+
+def _is_virtual_lhr_controller(tracker: OVRTracker) -> bool:
+    name = (tracker.name or "").upper()
+    return name.startswith("LHR-FFFFFF")
 def init_handles():
     vr_ipt = openvr.VRInput()
 
@@ -338,6 +343,8 @@ def _resolve_controller_targets(ovr_context: OVRContext) -> dict[str, bpy.types.
     unresolved = []
     for tracker in ovr_context.trackers:
         if tracker.type != str(openvr.TrackedDeviceClass_Controller):
+            continue
+        if _is_virtual_lhr_controller(tracker):
             continue
 
         target_obj = _get_tracker_live_object(tracker)

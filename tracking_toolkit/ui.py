@@ -154,8 +154,8 @@ class RecorderPanel(View3DPanel, bpy.types.Panel):
             def find_existing(hand: str) -> bpy.types.Object | None:
                 hand = hand.lower()
                 candidates = {
-                    "left": ["left controller", "controller left", "controller_l", "controller.l", "left_hand", "l_hand"],
-                    "right": ["right controller", "controller right", "controller_r", "controller.r", "right_hand", "r_hand"],
+                    "left": ["left controller", "controller left", "controller_l", "controller.l", "left_hand", "l_hand", "index left", "knuckles left"],
+                    "right": ["right controller", "controller right", "controller_r", "controller.r", "right_hand", "r_hand", "index right", "knuckles right"],
                 }
                 for obj in bpy.data.objects:
                     name = obj.name.lower()
@@ -176,6 +176,8 @@ class RecorderPanel(View3DPanel, bpy.types.Panel):
                     tracker_obj = tracker.target.object or bpy.data.objects.get(tracker.name)
                     if tracker.type != controller_type or not tracker_obj:
                         continue
+                    if tracker.name.upper().startswith("LHR-FFFFFF"):
+                        continue
                     try:
                         role = system.getInt32TrackedDeviceProperty(tracker.index, role_prop)
                     except Exception:
@@ -189,9 +191,9 @@ class RecorderPanel(View3DPanel, bpy.types.Panel):
                 pass
 
             if not left_obj:
-                left_obj = next(((t.target.object or bpy.data.objects.get(t.name)) for t in ovr_context.trackers if t.type == controller_type and "left" in t.name.lower()), None)
+                left_obj = next(((t.target.object or bpy.data.objects.get(t.name)) for t in ovr_context.trackers if t.type == controller_type and "left" in t.name.lower() and not t.name.upper().startswith("LHR-FFFFFF")), None)
             if not right_obj:
-                right_obj = next(((t.target.object or bpy.data.objects.get(t.name)) for t in ovr_context.trackers if t.type == controller_type and "right" in t.name.lower()), None)
+                right_obj = next(((t.target.object or bpy.data.objects.get(t.name)) for t in ovr_context.trackers if t.type == controller_type and "right" in t.name.lower() and not t.name.upper().startswith("LHR-FFFFFF")), None)
 
             return left_obj, right_obj
 
