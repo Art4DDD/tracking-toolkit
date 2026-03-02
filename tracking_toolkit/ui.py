@@ -127,15 +127,6 @@ class RecorderPanel(View3DPanel, bpy.types.Panel):
         # Skeletal finger debug (Knuckles)
         layout.label(text="Skeletal Fingers")
 
-        def draw_finger_block(block_layout, title: str, input_prop):
-            box = block_layout.box()
-            box.label(text=title)
-            box.prop(input_prop, "thumb_curl", text="Thumb")
-            box.prop(input_prop, "index_curl", text="Index")
-            box.prop(input_prop, "middle_curl", text="Middle")
-            box.prop(input_prop, "ring_curl", text="Ring")
-            box.prop(input_prop, "pinky_curl", text="Pinky")
-
         def draw_controller_props(block_layout, title: str, controller_obj: bpy.types.Object | None):
             box = block_layout.box()
             box.label(text=title)
@@ -154,9 +145,6 @@ class RecorderPanel(View3DPanel, bpy.types.Panel):
                 if channel not in controller_obj:
                     controller_obj[channel] = 0.0
                 box.prop(controller_obj, f'["{channel}"]', text=label)
-
-        draw_finger_block(layout, "Left Hand (Input State)", ovr_context.l_input)
-        draw_finger_block(layout, "Right Hand (Input State)", ovr_context.r_input)
 
         def resolve_controller_objects() -> tuple[bpy.types.Object | None, bpy.types.Object | None]:
             left_obj = None
@@ -194,8 +182,8 @@ class RecorderPanel(View3DPanel, bpy.types.Panel):
 
         left_controller, right_controller = resolve_controller_objects()
 
-        draw_controller_props(layout, "Left Controller Custom Properties", left_controller)
-        draw_controller_props(layout, "Right Controller Custom Properties", right_controller)
+        draw_controller_props(layout, "Left Controller", left_controller)
+        draw_controller_props(layout, "Right Controller", right_controller)
 
 
 class ArmaturePanel(View3DPanel, bpy.types.Panel):
