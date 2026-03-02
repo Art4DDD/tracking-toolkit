@@ -34,10 +34,26 @@ def init_handles():
         except Exception:
             return None
 
+    def _get_action_set_handle(action_set_path: str):
+        try:
+            return vr_ipt.getActionSetHandle(action_set_path)
+        except Exception:
+            return 0
+
     global action_sets
-    action_sets = (openvr.VRActiveActionSet_t * 1)()
-    action_set = action_sets[0]
-    action_set.ulActionSet = vr_ipt.getActionSetHandle("/actions/legacy")
+    action_set_handles = [
+        _get_action_set_handle("/actions/legacy"),
+        _get_action_set_handle("/actions/main"),
+        _get_action_set_handle("/actions/default"),
+    ]
+    action_set_handles = [handle for handle in action_set_handles if handle]
+    if not action_set_handles:
+        action_set_handles = [_get_action_set_handle("/actions/legacy")]
+
+    action_sets = (openvr.VRActiveActionSet_t * len(action_set_handles))()
+    for i, handle in enumerate(action_set_handles):
+        action_set = action_sets[i]
+        action_set.ulActionSet = handle
 
     global action_handles
     action_handles = {
@@ -68,6 +84,14 @@ def init_handles():
         "r_middle": _get_action_handle("/actions/legacy/in/Right_Finger_Middle_Value"),
         "r_ring": _get_action_handle("/actions/legacy/in/Right_Finger_Ring_Value"),
         "r_pinky": _get_action_handle("/actions/legacy/in/Right_Finger_Pinky_Value"),
+
+        # Skeletal actions (for Index/Knuckles full hand tracking)
+        "l_skeleton_legacy": _get_action_handle("/actions/legacy/in/Left_Hand_Skeleton"),
+        "r_skeleton_legacy": _get_action_handle("/actions/legacy/in/Right_Hand_Skeleton"),
+        "l_skeleton_main": _get_action_handle("/actions/main/in/LeftHandSkeleton"),
+        "r_skeleton_main": _get_action_handle("/actions/main/in/RightHandSkeleton"),
+        "l_skeleton_default": _get_action_handle("/actions/default/in/LeftHandSkeleton"),
+        "r_skeleton_default": _get_action_handle("/actions/default/in/RightHandSkeleton"),
     }
 
     print("Initialized OpenVR action handles")
@@ -119,6 +143,34 @@ def _get_input(ovr_context: OVRContext):
         except Exception:
             return default
 
+    def _get_skeletal_curls(action_keys: list[str]) -> tuple[float, float, float, float, float] | None:
+        if not hasattr(vr_ipt, "getSkeletalSummaryData"):
+            return None
+
+        summary_enum = getattr(openvr, "VRSummaryType_FromAnimation", 1)
+
+        for key in action_keys:
+            handle = action_handles.get(key)
+            if handle is None:
+                continue
+
+            try:
+                summary = vr_ipt.getSkeletalSummaryData(handle, summary_enum)
+            except Exception:
+                continue
+
+            finger_data = getattr(summary, "flFingerCurl", None)
+            if finger_data is None:
+                continue
+
+            try:
+                thumb, index, middle, ring, pinky = [float(v) for v in finger_data[:5]]
+                return thumb, index, middle, ring, pinky
+            except Exception:
+                continue
+
+        return None
+
     # Axis values
     l_ipt.joystick_position = _get_analog_vector("l_joystick")
     r_ipt.joystick_position = _get_analog_vector("r_joystick")
@@ -134,18 +186,28 @@ def _get_input(ovr_context: OVRContext):
     l_ipt.b_button = _get_digital_value("l_b")
     r_ipt.b_button = _get_digital_value("r_b")
 
-    # Finger curls: use explicit finger channels when available, otherwise fallback to trigger/grip estimation.
-    l_ipt.thumb_curl = _get_analog_value("l_thumb", 1.0 if (l_ipt.a_button or l_ipt.b_button) else 0.0)
-    l_ipt.index_curl = _get_analog_value("l_index", l_ipt.trigger_strength)
-    l_ipt.middle_curl = _get_analog_value("l_middle", l_ipt.grip_strength)
-    l_ipt.ring_curl = _get_analog_value("l_ring", l_ipt.grip_strength)
-    l_ipt.pinky_curl = _get_analog_value("l_pinky", l_ipt.grip_strength)
+    # Finger curls: prefer skeletal summaries (Index/Knuckles), fallback to per-finger analog channels,
+    # and finally to trigger/grip/button approximation.
+    l_skeletal = _get_skeletal_curls(["l_skeleton_main", "l_skeleton_default", "l_skeleton_legacy"])
+    r_skeletal = _get_skeletal_curls(["r_skeleton_main", "r_skeleton_default", "r_skeleton_legacy"])
 
-    r_ipt.thumb_curl = _get_analog_value("r_thumb", 1.0 if (r_ipt.a_button or r_ipt.b_button) else 0.0)
-    r_ipt.index_curl = _get_analog_value("r_index", r_ipt.trigger_strength)
-    r_ipt.middle_curl = _get_analog_value("r_middle", r_ipt.grip_strength)
-    r_ipt.ring_curl = _get_analog_value("r_ring", r_ipt.grip_strength)
-    r_ipt.pinky_curl = _get_analog_value("r_pinky", r_ipt.grip_strength)
+    if l_skeletal:
+        l_ipt.thumb_curl, l_ipt.index_curl, l_ipt.middle_curl, l_ipt.ring_curl, l_ipt.pinky_curl = l_skeletal
+    else:
+        l_ipt.thumb_curl = _get_analog_value("l_thumb", 1.0 if (l_ipt.a_button or l_ipt.b_button) else 0.0)
+        l_ipt.index_curl = _get_analog_value("l_index", l_ipt.trigger_strength)
+        l_ipt.middle_curl = _get_analog_value("l_middle", l_ipt.grip_strength)
+        l_ipt.ring_curl = _get_analog_value("l_ring", l_ipt.grip_strength)
+        l_ipt.pinky_curl = _get_analog_value("l_pinky", l_ipt.grip_strength)
+
+    if r_skeletal:
+        r_ipt.thumb_curl, r_ipt.index_curl, r_ipt.middle_curl, r_ipt.ring_curl, r_ipt.pinky_curl = r_skeletal
+    else:
+        r_ipt.thumb_curl = _get_analog_value("r_thumb", 1.0 if (r_ipt.a_button or r_ipt.b_button) else 0.0)
+        r_ipt.index_curl = _get_analog_value("r_index", r_ipt.trigger_strength)
+        r_ipt.middle_curl = _get_analog_value("r_middle", r_ipt.grip_strength)
+        r_ipt.ring_curl = _get_analog_value("r_ring", r_ipt.grip_strength)
+        r_ipt.pinky_curl = _get_analog_value("r_pinky", r_ipt.grip_strength)
 
 
 def _get_poses(ovr_context: OVRContext) -> Generator[tuple[datetime.datetime, OVRTracker, Matrix], None, None]:
