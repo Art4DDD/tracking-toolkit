@@ -37,6 +37,33 @@ FINGER_BONE_CHAINS = {
 }
 
 
+DEBUG_STRING_PROP_NAMES = (
+    "Prop_TrackingSystemName_String",
+    "Prop_ModelNumber_String",
+    "Prop_SerialNumber_String",
+    "Prop_ManufacturerName_String",
+    "Prop_RenderModelName_String",
+    "Prop_RegisteredDeviceType_String",
+    "Prop_ControllerType_String",
+    "Prop_ResourceRoot_String",
+    "Prop_InputProfilePath_String",
+    "Prop_DriverVersion_String",
+    "Prop_TrackingFirmwareVersion_String",
+    "Prop_ConnectedWirelessDongle_String",
+    "Prop_AllWirelessDongleDescriptions_String",
+    "Prop_NamedIconPathDeviceReady_String",
+)
+
+DEBUG_INT_PROP_NAMES = (
+    "Prop_ControllerRoleHint_Int32",
+    "Prop_DeviceClass_Int32",
+    "Prop_Axis0Type_Int32",
+    "Prop_Axis1Type_Int32",
+    "Prop_Axis2Type_Int32",
+    "Prop_Axis3Type_Int32",
+    "Prop_Axis4Type_Int32",
+)
+
 
 def _ensure_finger_properties(target_obj: bpy.types.Object):
     for channel in FINGER_CHANNELS:
@@ -120,24 +147,27 @@ def _collect_tracker_debug_info(system, device_index: int, device_class: int) ->
     fields = {
         "index": str(device_index),
         "class": str(device_class),
-        "tracking_system": _normalize_tracker_name(_safe_device_property(system, device_index, openvr.Prop_TrackingSystemName_String)),
-        "model": _normalize_tracker_name(_safe_device_property(system, device_index, openvr.Prop_ModelNumber_String)),
-        "serial": _normalize_tracker_name(_safe_device_property(system, device_index, openvr.Prop_SerialNumber_String)),
-        "manufacturer": _normalize_tracker_name(_safe_device_property(system, device_index, openvr.Prop_ManufacturerName_String)),
-        "render_model": _normalize_tracker_name(_safe_device_property(system, device_index, openvr.Prop_RenderModelName_String)),
-        "registered_type": _normalize_tracker_name(_safe_device_property(system, device_index, openvr.Prop_RegisteredDeviceType_String)),
-        "controller_type": _normalize_tracker_name(_safe_device_property(system, device_index, openvr.Prop_ControllerType_String)),
-        "resource_root": _normalize_tracker_name(_safe_device_property(system, device_index, openvr.Prop_ResourceRoot_String)),
-        "input_profile": _normalize_tracker_name(_safe_device_property(system, device_index, openvr.Prop_InputProfilePath_String)),
     }
 
-    try:
-        role_hint = system.getInt32TrackedDeviceProperty(device_index, openvr.Prop_ControllerRoleHint_Int32)
-        fields["role"] = str(int(role_hint))
-    except Exception:
-        fields["role"] = ""
+    for prop_name in DEBUG_STRING_PROP_NAMES:
+        prop_id = getattr(openvr, prop_name, None)
+        if prop_id is None:
+            continue
+        prop_value = _normalize_tracker_name(_safe_device_property(system, device_index, prop_id))
+        if prop_value:
+            fields[prop_name.replace("Prop_", "").replace("_String", "").lower()] = prop_value
 
-    return {k: v for k, v in fields.items() if v}
+    for prop_name in DEBUG_INT_PROP_NAMES:
+        prop_id = getattr(openvr, prop_name, None)
+        if prop_id is None:
+            continue
+        try:
+            prop_value = system.getInt32TrackedDeviceProperty(device_index, prop_id)
+            fields[prop_name.replace("Prop_", "").replace("_Int32", "").lower()] = str(int(prop_value))
+        except Exception:
+            continue
+
+    return fields
 
 
 def _format_tracker_debug_info(debug_info: dict[str, str]) -> str:
