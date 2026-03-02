@@ -76,24 +76,9 @@ def _get_input(ovr_context: OVRContext):
     l_ipt: OVRInput = ovr_context.l_input
     r_ipt: OVRInput = ovr_context.r_input
 
-    updated = False
-    update_errors = []
-
-    update_variants = [
-        lambda: vr_ipt.updateActionState(action_sets, ctypes.sizeof(openvr.VRActiveActionSet_t), len(action_sets)),
-        lambda: vr_ipt.updateActionState(action_sets),
-        lambda: vr_ipt.updateActionState(action_sets[0], ctypes.sizeof(openvr.VRActiveActionSet_t), 1),
-    ]
-
-    for update_call in update_variants:
-        try:
-            update_call()
-            updated = True
-            break
-        except Exception as e:
-            update_errors.append(str(e))
-
-    if not updated:
+    try:
+        vr_ipt.updateActionState(action_sets, ctypes.sizeof(openvr.VRActiveActionSet_t), len(action_sets))
+    except Exception:
         return
 
     def _calc_finger_curl(bone_transforms, chain: tuple[int, ...]) -> float:
@@ -124,7 +109,6 @@ def _get_input(ovr_context: OVRContext):
         return sum(curls) / len(curls)
 
     def _get_skeletal_finger_curls(action_key: str) -> dict[str, float] | None:
-        hand = "left" if action_key.startswith("l_") else "right"
         action = action_handles.get(action_key)
         if action is None:
             return None
@@ -149,22 +133,13 @@ def _get_input(ovr_context: OVRContext):
             summary_data_t = getattr(openvr, "InputSkeletalSummaryData_t", None)
             summary_type = getattr(openvr, "VRSummaryType_FromDevice", 1)
 
-            summary_variants = [
-                lambda: get_summary_fn(action),
-                lambda: get_summary_fn(action, summary_type),
-            ]
-            if summary_data_t:
-                summary_variants.extend([
-                    lambda: get_summary_fn(action, summary_data_t()),
-                    lambda: get_summary_fn(action, summary_type, summary_data_t()),
-                ])
-
-            for summary_call in summary_variants:
-                try:
-                    summary = summary_call()
-                    break
-                except Exception as e:
-                    summary_error = e
+            try:
+                if summary_data_t:
+                    summary = get_summary_fn(action, summary_type, summary_data_t())
+                else:
+                    summary = get_summary_fn(action, summary_type)
+            except Exception as e:
+                summary_error = e
 
         if isinstance(summary, tuple) and len(summary) >= 1:
             summary = summary[0]
@@ -191,18 +166,10 @@ def _get_input(ovr_context: OVRContext):
 
         bone_transforms = None
         bone_error = None
-        bone_variants = [
-            lambda: get_bone_data_fn(action, transform_space, motion_range),
-            lambda: get_bone_data_fn(action, transform_space, motion_range, bone_count),
-            lambda: get_bone_data_fn(action, transform_space, motion_range, None, bone_count),
-        ]
-
-        for bone_call in bone_variants:
-            try:
-                bone_transforms = bone_call()
-                break
-            except Exception as e:
-                bone_error = e
+        try:
+            bone_transforms = get_bone_data_fn(action, transform_space, motion_range, None, bone_count)
+        except Exception as e:
+            bone_error = e
 
         if isinstance(bone_transforms, tuple) and len(bone_transforms) >= 1:
             bone_transforms = bone_transforms[0]
