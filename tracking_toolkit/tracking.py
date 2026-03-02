@@ -27,6 +27,7 @@ action_handles = {}
 
 last_input_diag_time = 0.0
 skeletal_status = "Not initialized"
+skeletal_diag = {"left": "n/a", "right": "n/a"}
 
 FINGER_BONE_CHAINS = {
     "thumb": (2, 3, 4, 5),
@@ -158,21 +159,27 @@ def _get_input(ovr_context: OVRContext):
         return sum(curls) / len(curls)
 
     def _get_skeletal_finger_curls(action_key: str) -> dict[str, float] | None:
+        hand = "left" if action_key.startswith("l_") else "right"
         action = action_handles.get(action_key)
         if action is None:
+            skeletal_diag[hand] = "action handle is None"
             return None
 
         get_action_data_fn = getattr(vr_ipt, "getSkeletalActionData", None) or getattr(vr_ipt, "GetSkeletalActionData", None)
         if not get_action_data_fn:
+            skeletal_diag[hand] = "binding has no getSkeletalActionData"
             return None
 
         try:
             action_data = get_action_data_fn(action)
         except Exception as e:
             print(f"[OpenVR] getSkeletalActionData failed for {action_key}: {e}")
+            skeletal_diag[hand] = f"getSkeletalActionData failed: {e}"
             return None
 
         if not getattr(action_data, "bActive", False):
+            active_origin = getattr(action_data, "activeOrigin", 0)
+            skeletal_diag[hand] = f"inactive (activeOrigin={active_origin})"
             return None
 
         # 1) Preferred path: skeletal summary already contains per-finger curls.
@@ -194,6 +201,7 @@ def _get_input(ovr_context: OVRContext):
             if summary is not None:
                 curls = getattr(summary, "flFingerCurl", None) or getattr(summary, "fingerCurl", None)
                 if curls and len(curls) >= 5:
+                    skeletal_diag[hand] = "active via skeletal summary"
                     return {
                         "thumb": float(curls[0]),
                         "index": float(curls[1]),
@@ -205,6 +213,7 @@ def _get_input(ovr_context: OVRContext):
         # 2) Fallback path: estimate curls from skeletal bone transforms.
         get_bone_data_fn = getattr(vr_ipt, "getSkeletalBoneData", None) or getattr(vr_ipt, "GetSkeletalBoneData", None)
         if not get_bone_data_fn:
+            skeletal_diag[hand] = "no skeletal summary or bone API"
             return None
 
         transform_space = getattr(openvr, "VRSkeletalTransformSpace_Model", 0)
@@ -216,12 +225,15 @@ def _get_input(ovr_context: OVRContext):
         except TypeError:
             try:
                 bone_transforms = get_bone_data_fn(action, transform_space, motion_range, bone_count)
-            except Exception:
+            except Exception as e:
+                skeletal_diag[hand] = f"GetSkeletalBoneData failed: {e}"
                 return None
-        except Exception:
+        except Exception as e:
+            skeletal_diag[hand] = f"GetSkeletalBoneData failed: {e}"
             return None
 
         if not bone_transforms:
+            skeletal_diag[hand] = "bone data empty"
             return None
 
         result = {}
@@ -229,6 +241,7 @@ def _get_input(ovr_context: OVRContext):
             valid_chain = tuple(idx for idx in chain if idx < len(bone_transforms))
             result[finger_name] = _calc_finger_curl(bone_transforms, valid_chain)
 
+        skeletal_diag[hand] = "active via bone data fallback"
         return result
 
     l_skeletal = _get_skeletal_finger_curls("l_skeleton")
@@ -250,7 +263,7 @@ def _get_input(ovr_context: OVRContext):
     if l_skeletal or r_skeletal:
         skeletal_status = "Skeletal input active"
     else:
-        skeletal_status = "Skeletal inactive: open SteamVR Bindings for Blender and bind SkeletonLeft/RightHand"
+        skeletal_status = f"Skeletal inactive | L: {skeletal_diag['left']} | R: {skeletal_diag['right']}"
 
     # Lightweight diagnostics (once per ~2 seconds)
     global last_input_diag_time
@@ -530,6 +543,10 @@ def stop_preview():
 
 def get_skeletal_status() -> str:
     return skeletal_status
+
+
+def get_skeletal_diag() -> dict:
+    return skeletal_diag.copy()
 
 def load_trackers(ovr_context: OVRContext):
     print("OpenVR Loading Trackers")
