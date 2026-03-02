@@ -1035,3 +1035,47 @@ def load_trackers(ovr_context: OVRContext):
         debug_info = _collect_tracker_debug_info(system, i, device_class)
         if debug_info:
             print(f"[OpenVR Device] {_format_tracker_debug_info(debug_info)}")
+
+
+def append_trackers(ovr_context: OVRContext):
+    """Append new devices and refresh connection state without clearing existing list."""
+    print("OpenVR Appending Trackers")
+    system = openvr.VRSystem()
+
+    trackers_by_index = {tracker.index: tracker for tracker in ovr_context.trackers}
+
+    for i in range(openvr.k_unMaxTrackedDeviceCount):
+        device_class = system.getTrackedDeviceClass(i)
+        if device_class == openvr.TrackedDeviceClass_Invalid:
+            continue
+
+        tracker_serial = _safe_device_property(system, i, openvr.Prop_SerialNumber_String)
+        connected = bool(system.isTrackedDeviceConnected(i))
+
+        existing = trackers_by_index.get(i)
+        if existing:
+            existing.connected = connected
+            if tracker_serial:
+                existing.serial = tracker_serial
+            continue
+
+        tracker_name = _resolve_tracker_name(system, i, tracker_serial)
+
+        existing_names = {t.name for t in ovr_context.trackers}
+        unique_name = tracker_name
+        suffix = 2
+        while unique_name in existing_names:
+            unique_name = f"{tracker_name} {suffix}"
+            suffix += 1
+
+        tracker = ovr_context.trackers.add()
+        tracker.name = unique_name
+        tracker.prev_name = unique_name
+        tracker.serial = tracker_serial
+        tracker.type = str(device_class)
+        tracker.index = i
+        tracker.connected = connected
+
+        debug_info = _collect_tracker_debug_info(system, i, device_class)
+        if debug_info:
+            print(f"[OpenVR Device] {_format_tracker_debug_info(debug_info)}")
