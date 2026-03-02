@@ -90,6 +90,51 @@ def _find_existing_controller_object(hand: str) -> bpy.types.Object | None:
 def _is_virtual_lhr_controller(tracker: OVRTracker) -> bool:
     name = (tracker.name or "").upper()
     return name.startswith("LHR-FFFFFF")
+
+
+def _safe_device_property(system, device_index: int, property_id: int) -> str:
+    try:
+        return system.getStringTrackedDeviceProperty(device_index, property_id)
+    except Exception:
+        return ""
+
+
+def _get_controller_hand_name(system, device_index: int) -> str:
+    try:
+        role_hint = system.getInt32TrackedDeviceProperty(device_index, openvr.Prop_ControllerRoleHint_Int32)
+    except Exception:
+        return ""
+
+    role_map = {
+        int(getattr(openvr, "TrackedControllerRole_LeftHand", -1)): "Left Controller",
+        int(getattr(openvr, "TrackedControllerRole_RightHand", -1)): "Right Controller",
+    }
+    return role_map.get(int(role_hint), "")
+
+
+def _resolve_tracker_name(system, device_index: int, device_class: int, serial: str) -> str:
+    if not serial:
+        return f"Device {device_index}"
+
+    if not serial.upper().startswith("LHR-FFFFFF"):
+        return serial
+
+    if device_class == openvr.TrackedDeviceClass_HMD:
+        return "HMD"
+
+    if device_class == openvr.TrackedDeviceClass_Controller:
+        hand_name = _get_controller_hand_name(system, device_index)
+        if hand_name:
+            return hand_name
+        return "Controller"
+
+    model_name = _safe_device_property(system, device_index, openvr.Prop_ModelNumber_String)
+    if model_name:
+        return model_name
+
+    return serial
+
+
 def init_handles():
     vr_ipt = openvr.VRInput()
 
@@ -721,11 +766,14 @@ def load_trackers(ovr_context: OVRContext):
         if system.getTrackedDeviceClass(i) == openvr.TrackedDeviceClass_Invalid:
             continue
 
-        tracker_serial = system.getStringTrackedDeviceProperty(i, openvr.Prop_SerialNumber_String)
+        device_class = system.getTrackedDeviceClass(i)
+        tracker_serial = _safe_device_property(system, i, openvr.Prop_SerialNumber_String)
+        tracker_name = _resolve_tracker_name(system, i, device_class, tracker_serial)
+
         tracker = ovr_context.trackers.add()
-        tracker.name = tracker_serial
-        tracker.prev_name = tracker_serial
+        tracker.name = tracker_name
+        tracker.prev_name = tracker_name
         tracker.serial = tracker_serial
-        tracker.type = str(system.getTrackedDeviceClass(i))
+        tracker.type = str(device_class)
         tracker.index = i
         tracker.connected = bool(system.isTrackedDeviceConnected(i))  # Just in case, do it for both
