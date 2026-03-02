@@ -409,18 +409,20 @@ class CreateRefsOperator(bpy.types.Operator):
 
         # Static model database (explicit known model paths, no directory scanning)
         model_db = {
-            "vr_controller_knuckles": [
-                install_dir / "resources" / "rendermodels" / "vr_controller_knuckles" / "vr_controller_knuckles.obj",
-                install_dir / "resources" / "rendermodels" / "valve_controller_knu_1_0" / "valve_controller_knu_1_0.obj",
+            "vr_controller_knuckles_left": [
+                install_dir / "drivers" / "indexcontroller" / "resources" / "rendermodels" / "valve_controller_knu_ev2_0_left" / "valve_controller_knu_ev2_0_left.obj",
             ],
-            "pico_controller": [
-                install_dir / "drivers" / "pico" / "resources" / "rendermodels" / "pico_controller" / "pico_controller.obj",
-                install_dir / "drivers" / "pico" / "resources" / "rendermodels" / "pico4_controller" / "pico4_controller.obj",
-                install_dir / "drivers" / "pico" / "resources" / "rendermodels" / "pico_neo3_controller" / "pico_neo3_controller.obj",
+            "vr_controller_knuckles_right": [
+                install_dir / "drivers" / "indexcontroller" / "resources" / "rendermodels" / "valve_controller_knu_ev2_0_right" / "valve_controller_knu_ev2_0_right.obj",
+            ],
+            "pico_controller_left": [
+                install_dir / "drivers" / "vrlink" / "resources" / "rendermodels" / "pico_4_controller_left" / "pico_4_controller_left.obj",
+            ],
+            "pico_controller_right": [
+                install_dir / "drivers" / "vrlink" / "resources" / "rendermodels" / "pico_4_controller_right" / "pico_4_controller_right.obj",
             ],
             "tundra_tracker": [
-                install_dir / "drivers" / "tundra" / "resources" / "rendermodels" / "tundra_tracker" / "tundra_tracker.obj",
-                install_dir / "drivers" / "tundra" / "resources" / "rendermodels" / "tundra_tracker_hdk" / "tundra_tracker_hdk.obj",
+                install_dir / "drivers" / "tundra_labs" / "resources" / "rendermodels" / "tundra_tracker" / "tundra_tracker.obj",
             ],
             "lh_basestation_vive_2_0": [
                 install_dir / "resources" / "rendermodels" / "lh_basestation_vive_2_0" / "lh_basestation_vive_2_0.obj",
@@ -446,17 +448,38 @@ class CreateRefsOperator(bpy.types.Operator):
             except Exception:
                 return ""
 
+        def _get_prop_int(index: int, prop: int) -> int | None:
+            try:
+                return system.getInt32TrackedDeviceProperty(index, prop)
+            except Exception:
+                return None
+
+        def _controller_hand_side(tracker: OVRTracker) -> str | None:
+            role = _get_prop_int(tracker.index, openvr.Prop_ControllerRoleHint_Int32)
+            left_role = getattr(openvr, "TrackedControllerRole_LeftHand", 1)
+            right_role = getattr(openvr, "TrackedControllerRole_RightHand", 2)
+
+            if role == left_role:
+                return "left"
+            if role == right_role:
+                return "right"
+            return None
+
         def _resolve_model_obj_path(tracker: OVRTracker) -> Path | None:
             manufacturer = _get_prop(tracker.index, openvr.Prop_ManufacturerName_String).lower()
             model_number = _get_prop(tracker.index, openvr.Prop_ModelNumber_String).lower()
             controller_type = _get_prop(tracker.index, openvr.Prop_ControllerType_String).lower()
 
             keys = []
+            controller_side = _controller_hand_side(tracker)
+
             if "index" in model_number or "knuckles" in controller_type or "knuckles" in model_number:
-                keys.append("vr_controller_knuckles")
+                if controller_side:
+                    keys.append(f"vr_controller_knuckles_{controller_side}")
 
             if "pico" in manufacturer or "pico" in model_number:
-                keys.append("pico_controller")
+                if controller_side:
+                    keys.append(f"pico_controller_{controller_side}")
 
             if "tundra" in manufacturer or "tundra" in model_number:
                 keys.append("tundra_tracker")
