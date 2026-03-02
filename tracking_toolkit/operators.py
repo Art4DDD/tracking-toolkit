@@ -1,3 +1,4 @@
+import time
 import bpy
 import openvr
 from pathlib import Path
@@ -451,18 +452,54 @@ class CreateRefsOperator(bpy.types.Operator):
             if not load_model:
                 return None
 
-            try:
-                result = load_model(token)
-            except Exception:
-                return None
+            loading_err = getattr(openvr, "VRRenderModelError_Loading", 100)
+            none_err = getattr(openvr, "VRRenderModelError_None", 0)
 
-            if isinstance(result, tuple):
-                render_model = next((item for item in result if hasattr(item, "unVertexCount") or hasattr(item, "rVertexData")), None)
-            else:
-                render_model = result
+            def _parse_load_result(result) -> tuple[int, object | None]:
+                if isinstance(result, tuple):
+                    err = none_err
+                    model_obj = None
+                    for item in result:
+                        if isinstance(item, int):
+                            err = int(item)
+                        elif hasattr(item, "unVertexCount") or hasattr(item, "rVertexData"):
+                            model_obj = item
+                    return err, model_obj
+                if isinstance(result, int):
+                    return int(result), None
+                if hasattr(result, "unVertexCount") or hasattr(result, "rVertexData"):
+                    return none_err, result
+                return none_err, None
+
+            render_model = None
+            for _ in range(40):
+                try:
+                    result = load_model(token)
+                except Exception:
+                    return None
+                err, candidate = _parse_load_result(result)
+                if err == loading_err:
+                    time.sleep(0.01)
+                    continue
+                render_model = candidate
+                break
 
             if not render_model:
                 return None
+
+            def _vec3(raw) -> tuple[float, float, float]:
+                if raw is None:
+                    return 0.0, 0.0, 0.0
+                values = getattr(raw, "v", None)
+                if values is not None:
+                    try:
+                        return float(values[0]), float(values[1]), float(values[2])
+                    except Exception:
+                        pass
+                try:
+                    return float(raw[0]), float(raw[1]), float(raw[2])
+                except Exception:
+                    return float(getattr(raw, "x", 0.0)), float(getattr(raw, "y", 0.0)), float(getattr(raw, "z", 0.0))
 
             vertex_count = int(getattr(render_model, "unVertexCount", 0) or 0)
             triangle_count = int(getattr(render_model, "unTriangleCount", 0) or 0)
@@ -474,42 +511,27 @@ class CreateRefsOperator(bpy.types.Operator):
                     pass
                 return None
 
-            vertices = []
             vert_data = getattr(render_model, "rVertexData", None)
-            if vert_data is None:
-                try:
-                    if free_model:
-                        free_model(render_model)
-                except Exception:
-                    pass
-                return None
-            for i in range(vertex_count):
-                v = vert_data[i]
-                vec = getattr(v, "vPosition", None)
-                if vec is None:
-                    try:
-                        vec = v[0]
-                    except Exception:
-                        vec = None
-                if vec is None:
-                    vertices.append((0.0, 0.0, 0.0))
-                else:
-                    vertices.append((float(getattr(vec, "v", [0.0, 0.0, 0.0])[0]), float(getattr(vec, "v", [0.0, 0.0, 0.0])[1]), float(getattr(vec, "v", [0.0, 0.0, 0.0])[2])))
-
             indices = getattr(render_model, "rIndexData", None)
-            if indices is None:
+            if vert_data is None or indices is None:
                 try:
                     if free_model:
                         free_model(render_model)
                 except Exception:
                     pass
                 return None
-            faces = []
+
+            vertices: list[tuple[float, float, float]] = []
+            for i in range(vertex_count):
+                vertex = vert_data[i]
+                vertices.append(_vec3(getattr(vertex, "vPosition", vertex)))
+
+            faces: list[tuple[int, int, int]] = []
             for tri in range(triangle_count):
-                i0 = int(indices[tri * 3 + 0])
+                i0 = int(indices[tri * 3])
                 i1 = int(indices[tri * 3 + 1])
                 i2 = int(indices[tri * 3 + 2])
-                if i0 < vertex_count and i1 < vertex_count and i2 < vertex_count:
+                if 0 <= i0 < vertex_count and 0 <= i1 < vertex_count and 0 <= i2 < vertex_count:
                     faces.append((i0, i1, i2))
 
             try:
