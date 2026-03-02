@@ -107,13 +107,27 @@ def _get_input(ovr_context: OVRContext):
     l_ipt: OVRInput = ovr_context.l_input
     r_ipt: OVRInput = ovr_context.r_input
 
-    try:
-        vr_ipt.updateActionState(action_sets, ctypes.sizeof(openvr.VRActiveActionSet_t), len(action_sets))
-    except TypeError:
-        vr_ipt.updateActionState(action_sets)
-    except Exception as e:
-        print(f"[OpenVR] updateActionState failed: {e}")
-        skeletal_status = f"updateActionState failed: {e}"
+    updated = False
+    update_errors = []
+
+    update_variants = [
+        lambda: vr_ipt.updateActionState(action_sets, ctypes.sizeof(openvr.VRActiveActionSet_t), len(action_sets)),
+        lambda: vr_ipt.updateActionState(action_sets),
+        lambda: vr_ipt.updateActionState(action_sets[0], ctypes.sizeof(openvr.VRActiveActionSet_t), 1),
+    ]
+
+    for update_call in update_variants:
+        try:
+            update_call()
+            updated = True
+            break
+        except Exception as e:
+            update_errors.append(str(e))
+
+    if not updated:
+        err_text = " | ".join(update_errors) if update_errors else "unknown updateActionState error"
+        print(f"[OpenVR] updateActionState failed: {err_text}")
+        skeletal_status = f"updateActionState failed: {err_text}"
         return
 
     def _calc_finger_curl(bone_transforms, chain: tuple[int, ...]) -> float:
@@ -236,7 +250,7 @@ def _get_input(ovr_context: OVRContext):
     if l_skeletal or r_skeletal:
         skeletal_status = "Skeletal input active"
     else:
-        skeletal_status = "Skeletal actions inactive (bindings/SteamVR)"
+        skeletal_status = "Skeletal inactive: open SteamVR Bindings for Blender and bind SkeletonLeft/RightHand"
 
     # Lightweight diagnostics (once per ~2 seconds)
     global last_input_diag_time
