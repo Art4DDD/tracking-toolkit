@@ -1032,12 +1032,14 @@ def _append_new_trackers_only(ovr_context: OVRContext):
     system = openvr.VRSystem()
     known_indices = {tracker.index for tracker in ovr_context.trackers}
 
-    for i in range(openvr.k_unMaxTrackedDeviceCount):
-        device_class = system.getTrackedDeviceClass(i)
-        if device_class == openvr.TrackedDeviceClass_Invalid or i in known_indices:
+    for device in _iter_openvr_devices(system):
+        i = device["index"]
+        device_class = device["device_class"]
+        tracker_serial = device["serial"]
+
+        if i in known_indices:
             continue
 
-        tracker_serial = _safe_device_property(system, i, openvr.Prop_SerialNumber_String)
         tracker_name = _resolve_tracker_name(system, i, tracker_serial)
 
         existing_names = {t.name for t in ovr_context.trackers}
@@ -1068,14 +1070,31 @@ def dump_openvr_devices_to_console():
     print("OpenVR Device Dump")
     system = openvr.VRSystem()
 
+    for device in _iter_openvr_devices(system):
+        i = device["index"]
+        device_class = device["device_class"]
+
+        debug_info = _collect_tracker_debug_info(system, i, device_class)
+        if debug_info:
+            print(f"[OpenVR Device] {_format_tracker_debug_info(debug_info)}")
+
+
+def _iter_openvr_devices(system) -> list[dict[str, int | str]]:
+    """Mirror the classic VRState::Load pattern: iterate ids + class + serial."""
+    devices: list[dict[str, int | str]] = []
     for i in range(openvr.k_unMaxTrackedDeviceCount):
         device_class = system.getTrackedDeviceClass(i)
         if device_class == openvr.TrackedDeviceClass_Invalid:
             continue
 
-        debug_info = _collect_tracker_debug_info(system, i, device_class)
-        if debug_info:
-            print(f"[OpenVR Device] {_format_tracker_debug_info(debug_info)}")
+        device_serial = _safe_device_property(system, i, openvr.Prop_SerialNumber_String)
+        devices.append({
+            "index": i,
+            "device_class": device_class,
+            "serial": device_serial,
+        })
+
+    return devices
 
 def load_trackers(ovr_context: OVRContext):
     print("OpenVR Loading Trackers")
@@ -1083,12 +1102,10 @@ def load_trackers(ovr_context: OVRContext):
 
     ovr_context.trackers.clear()
 
-    for i in range(openvr.k_unMaxTrackedDeviceCount):
-        if system.getTrackedDeviceClass(i) == openvr.TrackedDeviceClass_Invalid:
-            continue
-
-        device_class = system.getTrackedDeviceClass(i)
-        tracker_serial = _safe_device_property(system, i, openvr.Prop_SerialNumber_String)
+    for device in _iter_openvr_devices(system):
+        i = device["index"]
+        device_class = device["device_class"]
+        tracker_serial = device["serial"]
         tracker_name = _resolve_tracker_name(system, i, tracker_serial)
 
         existing_names = {t.name for t in ovr_context.trackers}
