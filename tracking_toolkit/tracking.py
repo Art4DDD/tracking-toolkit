@@ -92,6 +92,11 @@ def _get_poses(ovr_context: OVRContext) -> Generator[tuple[datetime.datetime, OV
     poses, _ = openvr.VRCompositor().waitGetPoses([], None)
     time = datetime.datetime.now()
 
+    # Reuse transform data for this frame instead of recalculating it per tracker.
+    axis_to_world = bpy_extras.io_utils.axis_conversion("Z", "Y", "Y", "Z").to_4x4()
+    root = bpy.data.objects.get("OVR Root")
+    root_scale = Matrix.Scale(root.scale.length, 4) if root else None
+
     for tracker in ovr_context.trackers:
         if not bool(system.isTrackedDeviceConnected(tracker.index)):
             continue
@@ -99,13 +104,11 @@ def _get_poses(ovr_context: OVRContext) -> Generator[tuple[datetime.datetime, OV
         absolute_pose = poses[tracker.index].mDeviceToAbsoluteTracking
 
         mat = Matrix([list(absolute_pose[0]), list(absolute_pose[1]), list(absolute_pose[2]), [0, 0, 0, 1]])
-        mat_world = bpy_extras.io_utils.axis_conversion("Z", "Y", "Y", "Z").to_4x4()
-        mat_world = mat_world @ mat
+        mat_world = axis_to_world @ mat
 
         # Apply scale
-        root = bpy.data.objects.get("OVR Root")
-        if root:
-            mat_world = mat_world @ Matrix.Scale(root.scale.length, 4)
+        if root_scale:
+            mat_world = mat_world @ root_scale
 
         yield time, tracker, mat_world
 
@@ -119,7 +122,12 @@ def _openvr_poll_thread_func(ovr_context: OVRContext):
             pose_chunk.append(pose_data)
 
         with buffer_lock:
-            data_buffer.append(pose_chunk)
+            if ovr_context.recording:
+                data_buffer.append(pose_chunk)
+            else:
+                # In preview mode only the latest sample is consumed.
+                # Keep a single chunk to avoid unbounded growth over time.
+                data_buffer[:] = [pose_chunk]
 
         #_get_input(ovr_context)
         #_handle_input(ovr_context)
