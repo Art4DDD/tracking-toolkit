@@ -192,6 +192,30 @@ def _extract_driver_metadata(fields: dict[str, str]) -> dict[str, str]:
 
 
 
+
+
+def _infer_device_driver_id(fields: dict[str, str]) -> str:
+    input_profile_driver = (fields.get("input_profile_driver") or "").strip()
+    if input_profile_driver:
+        return input_profile_driver
+
+    registered = (fields.get("registereddevicetype") or "").strip()
+    if "/" in registered:
+        driver, _, _ = registered.partition("/")
+        if driver:
+            return driver
+
+    resource_root = (fields.get("resourceroot") or "").strip()
+    if resource_root:
+        normalized = resource_root.replace("\\", "/")
+        if normalized.startswith("{") and "}" in normalized:
+            end_idx = normalized.find("}")
+            if end_idx > 1:
+                return normalized[1:end_idx]
+        return normalized.split("/")[0]
+
+    return ""
+
 def _collect_driver_registry_info() -> dict[str, str]:
     info: dict[str, str] = {}
 
@@ -237,8 +261,9 @@ def _collect_driver_registry_info() -> dict[str, str]:
             names.append(name)
 
     if names:
-        info["driver_registry_count"] = str(len(names))
-        info["driver_registry_names"] = ",".join(sorted(set(names)))
+        uniq = sorted(set(names))
+        info["driver_registry_count"] = str(len(uniq))
+        info["driver_registry_names"] = ",".join(uniq)
 
     return info
 
@@ -340,7 +365,17 @@ def _collect_tracker_debug_info(system, device_index: int, device_class: int) ->
         fields.update(_extract_input_profile_info(input_profile_path))
 
     fields.update(_extract_driver_metadata(fields))
-    fields.update(_collect_driver_registry_info())
+
+    inferred_driver_id = _infer_device_driver_id(fields)
+    if inferred_driver_id:
+        fields["device_driver_id"] = inferred_driver_id
+
+    driver_registry = _collect_driver_registry_info()
+    fields.update(driver_registry)
+    if inferred_driver_id and driver_registry.get("driver_registry_names"):
+        known = {name.strip() for name in driver_registry["driver_registry_names"].split(",") if name.strip()}
+        fields["device_driver_registered"] = str(inferred_driver_id in known)
+
     fields.update(_collect_render_model_registry_info())
 
     return fields
