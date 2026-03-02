@@ -1,4 +1,5 @@
 import datetime
+import re
 import queue
 import threading
 from typing import Generator
@@ -360,15 +361,42 @@ def load_trackers(ovr_context: OVRContext):
 
     ovr_context.trackers.clear()
 
+    synthetic_serial_pattern = re.compile(r"^LHR-FFFFFFF[0-9A-F]+$", re.IGNORECASE)
+
+    def _get_prop(index: int, prop: int) -> str:
+        try:
+            value = system.getStringTrackedDeviceProperty(index, prop)
+            return value.strip() if value else ""
+        except Exception:
+            return ""
+
     for i in range(openvr.k_unMaxTrackedDeviceCount):
-        if system.getTrackedDeviceClass(i) == openvr.TrackedDeviceClass_Invalid:
+        device_class = system.getTrackedDeviceClass(i)
+        if device_class == openvr.TrackedDeviceClass_Invalid:
             continue
 
-        tracker_serial = system.getStringTrackedDeviceProperty(i, openvr.Prop_SerialNumber_String)
+        tracker_serial = _get_prop(i, openvr.Prop_SerialNumber_String)
+
+        # Keep the headset, but normalize synthetic serial-like names to a readable HMD model name.
+        if device_class == openvr.TrackedDeviceClass_HMD and synthetic_serial_pattern.match(tracker_serial):
+            model_number = _get_prop(i, openvr.Prop_ModelNumber_String)
+            render_model = _get_prop(i, openvr.Prop_RenderModelName_String)
+            tracking_system = _get_prop(i, openvr.Prop_TrackingSystemName_String)
+            tracker_name = model_number or render_model or tracking_system or "HMD"
+        else:
+            tracker_name = tracker_serial
+
+        if not tracker_name:
+            tracker_name = f"TrackedDevice_{i}"
+
+        # Skip synthetic pseudo-devices (commonly hands/fingers), but keep real HMD.
+        if device_class != openvr.TrackedDeviceClass_HMD and synthetic_serial_pattern.match(tracker_serial):
+            continue
+
         tracker = ovr_context.trackers.add()
-        tracker.name = tracker_serial
-        tracker.prev_name = tracker_serial
+        tracker.name = tracker_name
+        tracker.prev_name = tracker_name
         tracker.serial = tracker_serial
-        tracker.type = str(system.getTrackedDeviceClass(i))
+        tracker.type = str(device_class)
         tracker.index = i
         tracker.connected = bool(system.isTrackedDeviceConnected(i))  # Just in case, do it for both
