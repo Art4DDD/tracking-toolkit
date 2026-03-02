@@ -123,13 +123,9 @@ def _normalize_tracker_name(raw_name: str) -> str:
 
 
 def _resolve_tracker_name(system, device_index: int, serial: str) -> str:
-    tracking_system = _normalize_tracker_name(_safe_device_property(system, device_index, openvr.Prop_TrackingSystemName_String))
-    model = _normalize_tracker_name(_safe_device_property(system, device_index, openvr.Prop_ModelNumber_String))
     serial_clean = " ".join((serial or "").replace("\n", " ").replace("\r", " ").split())
-
-    name_parts = [part for part in (tracking_system, model, serial_clean) if part]
-    if name_parts:
-        return " ".join(name_parts)
+    if serial_clean:
+        return serial_clean
 
     return f"Device {device_index}"
 
@@ -138,6 +134,7 @@ def _collect_tracker_debug_info(system, device_index: int, device_class: int) ->
     fields = {
         "index": str(device_index),
         "class": str(device_class),
+        "connected": str(bool(system.isTrackedDeviceConnected(device_index))),
         "serial_raw": _safe_device_property(system, device_index, openvr.Prop_SerialNumber_String),
     }
 
