@@ -429,34 +429,39 @@ class CreateRefsOperator(bpy.types.Operator):
                 return None
 
         def _resolve_openvr_model_obj_path(tracker: OVRTracker) -> Path | None:
-            render_models = openvr.VRRenderModels()
-            get_original_path = getattr(render_models, "GetRenderModelOriginalPath", None)
-            if not get_original_path:
-                get_original_path = getattr(render_models, "getRenderModelOriginalPath", None)
+            def _resolve_obj_from_token(token: str, driver_name: str | None) -> Path | None:
+                token_clean = (token or "").strip().strip("/")
+                if not token_clean:
+                    return None
 
-            def _extract_path(result) -> str:
-                if isinstance(result, tuple):
-                    if result and isinstance(result[0], str):
-                        return result[0].strip()
-                    if len(result) > 1 and isinstance(result[1], str):
-                        return result[1].strip()
-                if isinstance(result, str):
-                    return result.strip()
-                return ""
+                token_name = token_clean.split("/")[-1]
+                roots: list[Path] = []
+                if driver_name:
+                    roots.append(install_dir / "drivers" / driver_name / "resources" / "rendermodels")
+                roots.append(install_dir / "resources" / "rendermodels")
 
-            def _from_render_model_token(model_name: str) -> Path | None:
-                if not model_name or not get_original_path:
-                    return None
-                try:
-                    result = get_original_path(model_name)
-                except Exception:
-                    return None
-                original_path = _extract_path(result)
-                if not original_path:
-                    return None
-                path_obj = Path(original_path)
-                print(f"[OpenVR OriginalPath] {path_obj}")
-                return path_obj
+                for root in roots:
+                    if not root.exists():
+                        continue
+
+                    # Common layout: rendermodels/<token>/<token>.obj
+                    candidate = root / token_name / f"{token_name}.obj"
+                    if candidate.exists():
+                        print(f"[OpenVR OriginalPath] {candidate}")
+                        return candidate
+
+                    # Token may already contain subdirs
+                    token_path = root / token_clean
+                    if token_path.suffix.lower() == ".obj" and token_path.exists():
+                        print(f"[OpenVR OriginalPath] {token_path}")
+                        return token_path
+
+                    candidate = token_path / f"{token_path.name}.obj"
+                    if candidate.exists():
+                        print(f"[OpenVR OriginalPath] {candidate}")
+                        return candidate
+
+                return None
 
             def _resolve_from_input_profile(input_profile_path: str) -> Path | None:
                 if not input_profile_path:
@@ -466,6 +471,7 @@ class CreateRefsOperator(bpy.types.Operator):
                 if not profile_rel_path:
                     return None
 
+                driver_name: str | None = None
                 if profile_rel_path.startswith("{"):
                     end_idx = profile_rel_path.find("}")
                     if end_idx <= 1:
@@ -503,23 +509,15 @@ class CreateRefsOperator(bpy.types.Operator):
                         candidates.append(hand_render_models["right"])
 
                 for token in candidates:
-                    resolved = _from_render_model_token(token)
+                    resolved = _resolve_obj_from_token(token, driver_name)
                     if resolved:
                         return resolved
-                return None
 
-            render_model_name = _get_prop(tracker.index, openvr.Prop_RenderModelName_String)
-            from_render_model = _from_render_model_token(render_model_name)
-            if from_render_model:
-                return from_render_model
+                return None
 
             input_profile_prop = getattr(openvr, "Prop_InputProfilePath_String", None)
             input_profile_path = _get_prop(tracker.index, input_profile_prop) if input_profile_prop is not None else ""
-            from_input_profile = _resolve_from_input_profile(input_profile_path)
-            if from_input_profile:
-                return from_input_profile
-
-            return None
+            return _resolve_from_input_profile(input_profile_path)
 
 
 

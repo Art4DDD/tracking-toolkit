@@ -37,34 +37,6 @@ FINGER_BONE_CHAINS = {
 }
 
 
-DEBUG_STRING_PROP_NAMES = (
-    "Prop_TrackingSystemName_String",
-    "Prop_ModelNumber_String",
-    "Prop_SerialNumber_String",
-    "Prop_ManufacturerName_String",
-    "Prop_RenderModelName_String",
-    "Prop_RegisteredDeviceType_String",
-    "Prop_ControllerType_String",
-    "Prop_ResourceRoot_String",
-    "Prop_InputProfilePath_String",
-    "Prop_DriverVersion_String",
-    "Prop_TrackingFirmwareVersion_String",
-    "Prop_ConnectedWirelessDongle_String",
-    "Prop_AllWirelessDongleDescriptions_String",
-    "Prop_NamedIconPathDeviceReady_String",
-)
-
-DEBUG_INT_PROP_NAMES = (
-    "Prop_ControllerRoleHint_Int32",
-    "Prop_DeviceClass_Int32",
-    "Prop_Axis0Type_Int32",
-    "Prop_Axis1Type_Int32",
-    "Prop_Axis2Type_Int32",
-    "Prop_Axis3Type_Int32",
-    "Prop_Axis4Type_Int32",
-)
-
-
 def _ensure_finger_properties(target_obj: bpy.types.Object):
     for channel in FINGER_CHANNELS:
         if channel not in target_obj:
@@ -137,38 +109,6 @@ def _resolve_tracker_name(system, device_index: int, serial: str) -> str:
         return serial_clean
 
     return f"Device {device_index}"
-
-
-def _collect_tracker_debug_info(system, device_index: int, device_class: int) -> dict[str, str]:
-    fields = {
-        "index": str(device_index),
-        "class": str(device_class),
-        "serial_raw": _safe_device_property(system, device_index, openvr.Prop_SerialNumber_String),
-    }
-
-    for prop_name in DEBUG_STRING_PROP_NAMES:
-        prop_id = getattr(openvr, prop_name, None)
-        if prop_id is None:
-            continue
-        prop_value = _normalize_tracker_name(_safe_device_property(system, device_index, prop_id))
-        if prop_value:
-            fields[prop_name.replace("Prop_", "").replace("_String", "").lower()] = prop_value
-
-    for prop_name in DEBUG_INT_PROP_NAMES:
-        prop_id = getattr(openvr, prop_name, None)
-        if prop_id is None:
-            continue
-        try:
-            prop_value = system.getInt32TrackedDeviceProperty(device_index, prop_id)
-            fields[prop_name.replace("Prop_", "").replace("_Int32", "").lower()] = str(int(prop_value))
-        except Exception:
-            continue
-
-    return fields
-
-
-def _format_tracker_debug_info(debug_info: dict[str, str]) -> str:
-    return " | ".join(f"{key}={value}" for key, value in debug_info.items())
 
 
 def init_handles():
@@ -818,6 +758,3 @@ def load_trackers(ovr_context: OVRContext):
         tracker.index = i
         tracker.connected = bool(system.isTrackedDeviceConnected(i))  # Just in case, do it for both
 
-        debug_info = _collect_tracker_debug_info(system, i, device_class)
-        if debug_info:
-            print(f"[OpenVR Device] {_format_tracker_debug_info(debug_info)}")
