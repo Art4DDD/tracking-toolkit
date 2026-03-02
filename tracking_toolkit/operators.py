@@ -1,3 +1,4 @@
+import json
 import bpy
 import openvr
 from pathlib import Path
@@ -514,12 +515,65 @@ class CreateRefsOperator(bpy.types.Operator):
                 print(f"[OpenVR OriginalPath] {path_obj}")
                 return path_obj
 
+            def _resolve_from_input_profile(input_profile_path: str, hand_side: str | None) -> Path | None:
+                if not input_profile_path:
+                    return None
+
+                profile_rel_path = input_profile_path.strip().lstrip("/")
+                if not profile_rel_path:
+                    return None
+
+                if profile_rel_path.startswith("{"):
+                    end = profile_rel_path.find("}")
+                    if end <= 1:
+                        return None
+                    driver_name = profile_rel_path[1:end]
+                    profile_suffix = profile_rel_path[end + 1:].lstrip("/")
+                    profile_path = install_dir / "drivers" / driver_name / "resources" / profile_suffix
+                else:
+                    profile_path = install_dir / profile_rel_path
+                    if not profile_path.exists():
+                        profile_path = install_dir / "resources" / profile_rel_path
+
+                if not profile_path.exists():
+                    return None
+
+                try:
+                    profile_data = json.loads(profile_path.read_text(encoding="utf-8"))
+                except Exception:
+                    return None
+
+                candidates: list[str] = []
+
+                direct = profile_data.get("render_model")
+                if isinstance(direct, str):
+                    candidates.append(direct)
+
+                hand_map = profile_data.get("hand_render_model")
+                if isinstance(hand_map, dict) and hand_side in {"left", "right"}:
+                    hand_value = hand_map.get(hand_side)
+                    if isinstance(hand_value, str):
+                        candidates.append(hand_value)
+
+                for token in candidates:
+                    resolved = _resolve_with_openvr_model(token)
+                    if resolved:
+                        return resolved
+
+                return None
+
+            side = _controller_hand_side(tracker)
             render_model_name = _get_prop(tracker.index, openvr.Prop_RenderModelName_String)
             original_path = _resolve_with_openvr_model(render_model_name)
             if original_path:
                 return original_path
 
-            side = _controller_hand_side(tracker)
+            input_profile_prop = getattr(openvr, "Prop_InputProfilePath_String", None)
+            input_profile_path = _get_prop(tracker.index, input_profile_prop) if input_profile_prop is not None else ""
+            profile_path = _resolve_from_input_profile(input_profile_path, side)
+            if profile_path:
+                return profile_path
+
             controller_type = _get_prop(tracker.index, getattr(openvr, "Prop_ControllerType_String", -1))
             registered_device_type = _get_prop(tracker.index, getattr(openvr, "Prop_RegisteredDeviceType_String", -1))
             tracking_system_name = _get_prop(tracker.index, getattr(openvr, "Prop_TrackingSystemName_String", -1))
@@ -527,6 +581,7 @@ class CreateRefsOperator(bpy.types.Operator):
 
             hints = [
                 render_model_name,
+                input_profile_path,
                 controller_type,
                 registered_device_type,
                 tracking_system_name,
@@ -537,16 +592,14 @@ class CreateRefsOperator(bpy.types.Operator):
             hints_lower = " ".join(h.lower() for h in hints if h)
 
             if side in {"left", "right"} and ("pico" in hints_lower or "neo3" in hints_lower):
-                for key in (f"pico_controller_{side}",):
-                    for path in model_db.get(key, []):
-                        if path.exists():
-                            return path
+                for path in model_db.get(f"pico_controller_{side}", []):
+                    if path.exists():
+                        return path
 
             if side in {"left", "right"} and ("knuckles" in hints_lower or "index" in hints_lower):
-                for key in (f"vr_controller_knuckles_{side}",):
-                    for path in model_db.get(key, []):
-                        if path.exists():
-                            return path
+                for path in model_db.get(f"vr_controller_knuckles_{side}", []):
+                    if path.exists():
+                        return path
 
             if "tundra" in hints_lower:
                 for path in model_db.get("tundra_tracker", []):
