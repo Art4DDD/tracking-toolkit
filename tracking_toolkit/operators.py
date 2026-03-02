@@ -1,11 +1,11 @@
-import time
 import bpy
 import openvr
 from pathlib import Path
 from mathutils import Vector
 
-from .properties import OVRTransform, OVRContext, OVRTracker
+from .properties import Preferences, OVRTransform, OVRContext, OVRTracker
 from .tracking import load_trackers, start_recording, stop_recording, start_preview, stop_preview, init_handles
+from .. import __package__ as base_package
 
 
 class BuildArmatureOperator(bpy.types.Operator):
@@ -408,8 +408,55 @@ class CreateRefsOperator(bpy.types.Operator):
 
         # Import models
 
+        # Get model paths from preferences
+        preferences: Preferences | None = context.preferences.addons[base_package].preferences
+        install_dir = Path(preferences.steamvr_installation_path)
+
         system = openvr.VRSystem()
+
+        fallback_models = {
+            str(openvr.TrackedDeviceClass_GenericTracker): "vr_tracker_vive_3_0",
+            str(openvr.TrackedDeviceClass_Controller): "vr_controller_vive_1_5",
+            str(openvr.TrackedDeviceClass_HMD): "generic_hmd",
+            str(openvr.TrackedDeviceClass_TrackingReference): "lh_basestation_valve_gen2",
+        }
+
         model_templates: dict[str, bpy.types.Object] = {}
+
+        # Static model database (explicit known model paths, no directory scanning)
+        model_db = {
+            "vr_controller_knuckles_left": [
+                install_dir / "drivers" / "indexcontroller" / "resources" / "rendermodels" / "valve_controller_knu_ev2_0_left" / "valve_controller_knu_ev2_0_left.obj",
+            ],
+            "vr_controller_knuckles_right": [
+                install_dir / "drivers" / "indexcontroller" / "resources" / "rendermodels" / "valve_controller_knu_ev2_0_right" / "valve_controller_knu_ev2_0_right.obj",
+            ],
+            "pico_controller_left": [
+                install_dir / "drivers" / "vrlink" / "resources" / "rendermodels" / "pico_4_controller_left" / "pico_4_controller_left.obj",
+            ],
+            "pico_controller_right": [
+                install_dir / "drivers" / "vrlink" / "resources" / "rendermodels" / "pico_4_controller_right" / "pico_4_controller_right.obj",
+            ],
+            "tundra_tracker": [
+                install_dir / "drivers" / "tundra_labs" / "resources" / "rendermodels" / "tundra_tracker" / "tundra_tracker.obj",
+            ],
+            "lh_basestation_valve_gen2": [
+                install_dir / "resources" / "rendermodels" / "lh_basestation_valve_gen2" / "lh_basestation_valve_gen2.obj",
+            ],
+            "lh_basestation_vive": [
+                install_dir / "resources" / "rendermodels" / "lh_basestation_vive" / "lh_basestation_vive.obj",
+            ],
+            "vr_tracker_vive_3_0": [
+                install_dir / "drivers" / "htc" / "resources" / "rendermodels" / "vr_tracker_vive_3_0" / "vr_tracker_vive_3_0.obj",
+                install_dir / "resources" / "rendermodels" / "vr_tracker_vive_3_0" / "vr_tracker_vive_3_0.obj",
+            ],
+            "vr_controller_vive_1_5": [
+                install_dir / "resources" / "rendermodels" / "vr_controller_vive_1_5" / "vr_controller_vive_1_5.obj",
+            ],
+            "generic_hmd": [
+                install_dir / "resources" / "rendermodels" / "generic_hmd" / "generic_hmd.obj",
+            ],
+        }
 
         def _get_prop(index: int, prop: int) -> str:
             try:
@@ -423,270 +470,143 @@ class CreateRefsOperator(bpy.types.Operator):
             except Exception:
                 return None
 
-        def _resolve_openvr_model_tokens(tracker: OVRTracker) -> list[str]:
-            candidates: list[str] = []
+        def _controller_hand_side(tracker: OVRTracker) -> str | None:
+            role = _get_prop_int(tracker.index, openvr.Prop_ControllerRoleHint_Int32)
+            left_role = getattr(openvr, "TrackedControllerRole_LeftHand", 1)
+            right_role = getattr(openvr, "TrackedControllerRole_RightHand", 2)
 
-            def _add(token: str):
-                token = (token or "").strip()
-                if token and token not in candidates:
-                    candidates.append(token)
+            if role == left_role:
+                return "left"
+            if role == right_role:
+                return "right"
+            return None
 
+        def _resolve_openvr_model_obj_path(tracker: OVRTracker) -> Path | None:
             render_model_name = _get_prop(tracker.index, openvr.Prop_RenderModelName_String)
-            _add(render_model_name)
-            _add(_get_prop(tracker.index, getattr(openvr, "Prop_ControllerType_String", -1)))
-            _add(_get_prop(tracker.index, getattr(openvr, "Prop_RegisteredDeviceType_String", -1)))
-            _add(_get_prop(tracker.index, getattr(openvr, "Prop_ModelNumber_String", -1)))
+            print(f"[OpenVR RenderModel] device={tracker.index} serial={tracker.serial} render_model={render_model_name}")
+            if not render_model_name:
+                return None
 
             render_models = openvr.VRRenderModels()
+            get_original_path = (
+                getattr(render_models, "getRenderModelOriginalPath", None)
+                or getattr(render_models, "GetRenderModelOriginalPath", None)
+            )
+            if not get_original_path:
+                return None
+
+            def _extract_path(result) -> str:
+                if isinstance(result, tuple):
+                    if result and isinstance(result[0], str):
+                        return result[0].strip()
+                    if len(result) > 1 and isinstance(result[1], str):
+                        return result[1].strip()
+                if isinstance(result, str):
+                    return result.strip()
+                return ""
+
+            result = get_original_path(render_model_name)
+            original_path = _extract_path(result)
+
+            # SteamVR may resolve final visuals through component render models.
             get_component_count = (
-                getattr(render_models, "GetComponentCount", None)
-                or getattr(render_models, "getComponentCount", None)
+                getattr(render_models, "getComponentCount", None)
+                or getattr(render_models, "GetComponentCount", None)
             )
             get_component_name = (
-                getattr(render_models, "GetComponentName", None)
-                or getattr(render_models, "getComponentName", None)
+                getattr(render_models, "getComponentName", None)
+                or getattr(render_models, "GetComponentName", None)
             )
-            get_component_model_name = (
-                getattr(render_models, "GetComponentRenderModelName", None)
-                or getattr(render_models, "getComponentRenderModelName", None)
+            get_component_render_model_name = (
+                getattr(render_models, "getComponentRenderModelName", None)
+                or getattr(render_models, "GetComponentRenderModelName", None)
             )
-            if render_model_name and get_component_count and get_component_name and get_component_model_name:
+
+            component_paths: list[str] = []
+            if get_component_count and get_component_name and get_component_render_model_name:
                 try:
                     component_count = int(get_component_count(render_model_name))
                 except Exception:
                     component_count = 0
-                for component_idx in range(max(component_count, 0)):
+
+                for component_index in range(max(component_count, 0)):
                     try:
-                        name_result = get_component_name(render_model_name, component_idx)
+                        component_name_result = get_component_name(render_model_name, component_index)
                     except Exception:
                         continue
-                    if isinstance(name_result, tuple):
-                        component_name = next((item for item in name_result if isinstance(item, str)), "")
-                    else:
-                        component_name = name_result if isinstance(name_result, str) else ""
-                    component_name = component_name.strip()
+
+                    component_name = _extract_path(component_name_result)
                     if not component_name:
                         continue
+
                     try:
-                        model_result = get_component_model_name(render_model_name, component_name)
+                        component_model_result = get_component_render_model_name(render_model_name, component_name)
                     except Exception:
                         continue
-                    if isinstance(model_result, tuple):
-                        component_model = next((item for item in model_result if isinstance(item, str)), "")
-                    else:
-                        component_model = model_result if isinstance(model_result, str) else ""
-                    _add(component_model)
 
-            device_class = system.getTrackedDeviceClass(tracker.index)
-            role = _get_prop_int(tracker.index, getattr(openvr, "Prop_ControllerRoleHint_Int32", -1))
-            left_role = getattr(openvr, "TrackedControllerRole_LeftHand", 1)
-            right_role = getattr(openvr, "TrackedControllerRole_RightHand", 2)
+                    component_model_name = _extract_path(component_model_result)
+                    if not component_model_name:
+                        continue
 
-            if device_class == getattr(openvr, "TrackedDeviceClass_Controller", 2):
-                if role == left_role:
-                    _add("vr_controller_knuckles_left")
-                    _add("pico_4_controller_left")
-                elif role == right_role:
-                    _add("vr_controller_knuckles_right")
-                    _add("pico_4_controller_right")
-                _add("vr_controller_vive_1_5")
-            elif device_class == getattr(openvr, "TrackedDeviceClass_GenericTracker", 3):
-                _add("vr_tracker_vive_3_0")
-                _add("tundra_tracker")
-            elif device_class == getattr(openvr, "TrackedDeviceClass_HMD", 1):
-                _add("generic_hmd")
-            elif device_class == getattr(openvr, "TrackedDeviceClass_TrackingReference", 4):
-                _add("lh_basestation_valve_gen2")
-                _add("lh_basestation_vive")
-
-            # Last-resort token discovery: enumerate runtime render-model names.
-            get_count = (
-                getattr(render_models, "GetRenderModelCount", None)
-                or getattr(render_models, "getRenderModelCount", None)
-            )
-            get_name = (
-                getattr(render_models, "GetRenderModelName", None)
-                or getattr(render_models, "getRenderModelName", None)
-            )
-            if get_count and get_name:
-                try:
-                    count = int(get_count())
-                except Exception:
-                    count = 0
-
-                hints = " ".join([
-                    _get_prop(tracker.index, getattr(openvr, "Prop_TrackingSystemName_String", -1)).lower(),
-                    _get_prop(tracker.index, getattr(openvr, "Prop_ManufacturerName_String", -1)).lower(),
-                    _get_prop(tracker.index, getattr(openvr, "Prop_ControllerType_String", -1)).lower(),
-                    _get_prop(tracker.index, getattr(openvr, "Prop_RegisteredDeviceType_String", -1)).lower(),
-                    _get_prop(tracker.index, getattr(openvr, "Prop_ModelNumber_String", -1)).lower(),
-                ])
-
-                preferred: list[str] = []
-                fallback: list[str] = []
-                for idx in range(max(count, 0)):
                     try:
-                        n = get_name(idx)
+                        component_path_result = get_original_path(component_model_name)
                     except Exception:
                         continue
-                    if isinstance(n, tuple):
-                        name = next((item for item in n if isinstance(item, str)), "")
-                    else:
-                        name = n if isinstance(n, str) else ""
-                    name = name.strip()
-                    if not name:
+
+                    component_path = _extract_path(component_path_result)
+                    if not component_path:
                         continue
 
-                    lname = name.lower()
-                    score = 0
-                    for hint in ["pico", "index", "knuckles", "vive", "tundra", "tracker", "controller", "hmd", "base", "lighthouse", "valve", "htc"]:
-                        if hint in hints and hint in lname:
-                            score += 1
-                    if role == left_role and ("left" in lname or "_l" in lname):
-                        score += 2
-                    if role == right_role and ("right" in lname or "_r" in lname):
-                        score += 2
+                    print(
+                        f"[OpenVR ComponentModel] device={tracker.index} component={component_name} "
+                        f"model={component_model_name} path={component_path}"
+                    )
+                    component_paths.append(component_path)
 
-                    if score > 0:
-                        preferred.append(name)
-                    else:
-                        fallback.append(name)
+            chosen_path = original_path
+            if component_paths:
+                chosen_path = component_paths[0]
+                for candidate in component_paths:
+                    lower_candidate = candidate.lower()
+                    if "pico" in lower_candidate and "knuckles" in chosen_path.lower():
+                        chosen_path = candidate
+                        break
 
-                for name in preferred + fallback:
-                    _add(name)
-
-            return candidates
-
-
-        def _get_or_import_model(render_model_token: str) -> bpy.types.Object | None:
-            token = (render_model_token or "").strip()
-            if not token:
+            if not chosen_path:
                 return None
 
-            cached = model_templates.get(token)
+            path_obj = Path(chosen_path)
+            print(f"[OpenVR ModelPath] device={tracker.index} serial={tracker.serial} path={path_obj} source=render_models_api")
+            return path_obj
+
+
+
+        def _resolve_model_obj_path(tracker: OVRTracker) -> Path | None:
+            return _resolve_openvr_model_obj_path(tracker)
+
+        def _get_or_import_model(path: Path) -> bpy.types.Object | None:
+            key = str(path.resolve())
+            cached = model_templates.get(key)
             if cached and cached.name in bpy.data.objects:
                 return cached
 
-            render_models = openvr.VRRenderModels()
-            load_model = (
-                getattr(render_models, "LoadRenderModel_Async", None)
-                or getattr(render_models, "loadRenderModel_Async", None)
-            )
-            free_model = (
-                getattr(render_models, "FreeRenderModel", None)
-                or getattr(render_models, "freeRenderModel", None)
-            )
-            if not load_model:
-                return None
-
-            loading_err = getattr(openvr, "VRRenderModelError_Loading", 100)
-            none_err = getattr(openvr, "VRRenderModelError_None", 0)
-
-            def _parse_load_result(result) -> tuple[int, object | None]:
-                if isinstance(result, tuple):
-                    err = none_err
-                    model_obj = None
-                    for item in result:
-                        if isinstance(item, int):
-                            err = int(item)
-                        elif hasattr(item, "unVertexCount") or hasattr(item, "rVertexData"):
-                            model_obj = item
-                    return err, model_obj
-                if isinstance(result, int):
-                    return int(result), None
-                if hasattr(result, "unVertexCount") or hasattr(result, "rVertexData"):
-                    return none_err, result
-                return none_err, None
-
-            render_model = None
-            for _ in range(40):
-                try:
-                    result = load_model(token)
-                except Exception:
-                    return None
-                err, candidate = _parse_load_result(result)
-                if err == loading_err:
-                    time.sleep(0.01)
-                    continue
-                render_model = candidate
-                break
-
-            if not render_model:
-                return None
-
-            def _vec3(raw) -> tuple[float, float, float]:
-                if raw is None:
-                    return 0.0, 0.0, 0.0
-                values = getattr(raw, "v", None)
-                if values is not None:
-                    try:
-                        return float(values[0]), float(values[1]), float(values[2])
-                    except Exception:
-                        pass
-                try:
-                    return float(raw[0]), float(raw[1]), float(raw[2])
-                except Exception:
-                    return float(getattr(raw, "x", 0.0)), float(getattr(raw, "y", 0.0)), float(getattr(raw, "z", 0.0))
-
-            vertex_count = int(getattr(render_model, "unVertexCount", 0) or 0)
-            triangle_count = int(getattr(render_model, "unTriangleCount", 0) or 0)
-            if vertex_count <= 0 or triangle_count <= 0:
-                try:
-                    if free_model:
-                        free_model(render_model)
-                except Exception:
-                    pass
-                return None
-
-            vert_data = getattr(render_model, "rVertexData", None)
-            indices = getattr(render_model, "rIndexData", None)
-            if vert_data is None or indices is None:
-                try:
-                    if free_model:
-                        free_model(render_model)
-                except Exception:
-                    pass
-                return None
-
-            vertices: list[tuple[float, float, float]] = []
-            for i in range(vertex_count):
-                vertex = vert_data[i]
-                vertices.append(_vec3(getattr(vertex, "vPosition", vertex)))
-
-            faces: list[tuple[int, int, int]] = []
-            for tri in range(triangle_count):
-                i0 = int(indices[tri * 3])
-                i1 = int(indices[tri * 3 + 1])
-                i2 = int(indices[tri * 3 + 2])
-                if 0 <= i0 < vertex_count and 0 <= i1 < vertex_count and 0 <= i2 < vertex_count:
-                    faces.append((i0, i1, i2))
-
             try:
-                if free_model:
-                    free_model(render_model)
-            except Exception:
-                pass
-
-            if not vertices or not faces:
+                bpy.ops.wm.obj_import(filepath=str(path))
+            except RuntimeError:
                 return None
 
-            safe_token = token.replace("/", "_").replace("\\", "_")
-            mesh = bpy.data.meshes.new(f"TTK_RenderModel_{safe_token}")
-            mesh.from_pydata(vertices, [], faces)
-            mesh.validate(clean_customdata=False)
-            mesh.update()
+            imported = bpy.context.object
+            if not imported:
+                return None
 
-            imported = bpy.data.objects.new(f"TTK_Template_{safe_token}", mesh)
-            bpy.context.scene.collection.objects.link(imported)
             imported.location = (0, 0, 0)
             imported.rotation_euler = (0, 0, 0)
             imported.scale = (1, 1, 1)
+            imported.name = f"TTK_Template_{path.stem}"
             imported.hide_render = True
-            print(f"[OpenVR RenderModel] {token}")
 
-            model_templates[token] = imported
+            model_templates[key] = imported
             return imported
-
 
         load_trackers(ovr_context)
 
@@ -702,12 +622,8 @@ class CreateRefsOperator(bpy.types.Operator):
 
             print(">", tracker_name)
 
-            model = None
-            for model_token in _resolve_openvr_model_tokens(tracker):
-                print(f"[OpenVR TokenTry] {model_token}")
-                model = _get_or_import_model(model_token)
-                if model:
-                    break
+            model_path = _resolve_model_obj_path(tracker)
+            model = _get_or_import_model(model_path) if model_path else None
 
             if not model:
                 print(f"Could not resolve model for {tracker_name}; skipping")

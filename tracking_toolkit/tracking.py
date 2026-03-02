@@ -37,6 +37,25 @@ FINGER_BONE_CHAINS = {
 }
 
 
+DEBUG_STRING_PROP_SUFFIX = "_String"
+DEBUG_INT_PROP_SUFFIX = "_Int32"
+DEBUG_UINT64_PROP_SUFFIX = "_Uint64"
+DEBUG_BOOL_PROP_SUFFIX = "_Bool"
+DEBUG_FLOAT_PROP_SUFFIX = "_Float"
+
+
+def _iter_openvr_property_ids_by_suffix(suffix: str) -> list[tuple[str, int]]:
+    props: list[tuple[str, int]] = []
+    for attr in dir(openvr):
+        if not attr.startswith("Prop_") or not attr.endswith(suffix):
+            continue
+        prop_id = getattr(openvr, attr, None)
+        if isinstance(prop_id, int):
+            props.append((attr, prop_id))
+    props.sort(key=lambda x: x[0])
+    return props
+
+
 def _ensure_finger_properties(target_obj: bpy.types.Object):
     for channel in FINGER_CHANNELS:
         if channel not in target_obj:
@@ -104,11 +123,62 @@ def _normalize_tracker_name(raw_name: str) -> str:
 
 
 def _resolve_tracker_name(system, device_index: int, serial: str) -> str:
+    tracking_system = _normalize_tracker_name(_safe_device_property(system, device_index, openvr.Prop_TrackingSystemName_String))
+    model = _normalize_tracker_name(_safe_device_property(system, device_index, openvr.Prop_ModelNumber_String))
     serial_clean = " ".join((serial or "").replace("\n", " ").replace("\r", " ").split())
-    if serial_clean:
-        return serial_clean
+
+    name_parts = [part for part in (tracking_system, model, serial_clean) if part]
+    if name_parts:
+        return " ".join(name_parts)
 
     return f"Device {device_index}"
+
+
+def _collect_tracker_debug_info(system, device_index: int, device_class: int) -> dict[str, str]:
+    fields = {
+        "index": str(device_index),
+        "class": str(device_class),
+        "serial_raw": _safe_device_property(system, device_index, openvr.Prop_SerialNumber_String),
+    }
+
+    for prop_name, prop_id in _iter_openvr_property_ids_by_suffix(DEBUG_STRING_PROP_SUFFIX):
+        prop_value = _normalize_tracker_name(_safe_device_property(system, device_index, prop_id))
+        if prop_value:
+            fields[prop_name.replace("Prop_", "").replace(DEBUG_STRING_PROP_SUFFIX, "").lower()] = prop_value
+
+    for prop_name, prop_id in _iter_openvr_property_ids_by_suffix(DEBUG_INT_PROP_SUFFIX):
+        try:
+            prop_value = system.getInt32TrackedDeviceProperty(device_index, prop_id)
+            fields[prop_name.replace("Prop_", "").replace(DEBUG_INT_PROP_SUFFIX, "").lower()] = str(int(prop_value))
+        except Exception:
+            continue
+
+    for prop_name, prop_id in _iter_openvr_property_ids_by_suffix(DEBUG_UINT64_PROP_SUFFIX):
+        try:
+            prop_value = system.getUint64TrackedDeviceProperty(device_index, prop_id)
+            fields[prop_name.replace("Prop_", "").replace(DEBUG_UINT64_PROP_SUFFIX, "").lower()] = str(int(prop_value))
+        except Exception:
+            continue
+
+    for prop_name, prop_id in _iter_openvr_property_ids_by_suffix(DEBUG_BOOL_PROP_SUFFIX):
+        try:
+            prop_value = system.getBoolTrackedDeviceProperty(device_index, prop_id)
+            fields[prop_name.replace("Prop_", "").replace(DEBUG_BOOL_PROP_SUFFIX, "").lower()] = str(bool(prop_value))
+        except Exception:
+            continue
+
+    for prop_name, prop_id in _iter_openvr_property_ids_by_suffix(DEBUG_FLOAT_PROP_SUFFIX):
+        try:
+            prop_value = system.getFloatTrackedDeviceProperty(device_index, prop_id)
+            fields[prop_name.replace("Prop_", "").replace(DEBUG_FLOAT_PROP_SUFFIX, "").lower()] = f"{float(prop_value):.6f}"
+        except Exception:
+            continue
+
+    return fields
+
+
+def _format_tracker_debug_info(debug_info: dict[str, str]) -> str:
+    return " | ".join(f"{key}={value}" for key, value in debug_info.items())
 
 
 def init_handles():
@@ -758,3 +828,6 @@ def load_trackers(ovr_context: OVRContext):
         tracker.index = i
         tracker.connected = bool(system.isTrackedDeviceConnected(i))  # Just in case, do it for both
 
+        debug_info = _collect_tracker_debug_info(system, i, device_class)
+        if debug_info:
+            print(f"[OpenVR Device] {_format_tracker_debug_info(debug_info)}")
