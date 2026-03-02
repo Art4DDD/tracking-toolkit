@@ -1,8 +1,9 @@
 import bpy
 import openvr
+from pathlib import Path
 from mathutils import Vector
 
-from .properties import Preferences, OVRTransform, OVRContext
+from .properties import Preferences, OVRTransform, OVRContext, OVRTracker
 from .tracking import load_trackers, start_recording, stop_recording, start_preview, stop_preview, init_handles
 from .. import __package__ as base_package
 
@@ -393,42 +394,89 @@ class CreateRefsOperator(bpy.types.Operator):
 
         # Get model paths from preferences
         preferences: Preferences | None = context.preferences.addons[base_package].preferences
+        install_dir = Path(preferences.steamvr_installation_path)
 
-        install_dir = preferences.steamvr_installation_path
-        tracker_model_path = (f"{install_dir}/drivers/htc/resources/rendermodels/"
-                              "vr_tracker_vive_3_0/vr_tracker_vive_3_0.obj")
-        controller_model_path = (f"{install_dir}/resources/rendermodels/"
-                                 "vr_controller_vive_1_5/vr_controller_vive_1_5.obj")
-        hmd_model_path = (f"{install_dir}/resources/rendermodels/"
-                          "generic_hmd/generic_hmd.obj")
+        system = openvr.VRSystem()
 
-        try:
-            bpy.ops.wm.obj_import(filepath=tracker_model_path)
-            tracker_model = bpy.context.object
+        fallback_models = {
+            str(openvr.TrackedDeviceClass_GenericTracker): "vr_tracker_vive_3_0",
+            str(openvr.TrackedDeviceClass_Controller): "vr_controller_vive_1_5",
+            str(openvr.TrackedDeviceClass_HMD): "generic_hmd",
+            str(openvr.TrackedDeviceClass_TrackingReference): "lh_basestation_vive",
+        }
 
-            bpy.ops.wm.obj_import(filepath=controller_model_path)
-            controller_model = bpy.context.object
+        fallback_lighthouse_models = [
+            "lh_basestation_vive_2_0",
+            "lh_basestation_vive",
+        ]
 
-            bpy.ops.wm.obj_import(filepath=hmd_model_path)
-            hmd_model = bpy.context.object
-        except RuntimeError:
-            self.report(
-                {"ERROR"},
-                "Could not import tracker models. Check your SteamVR path in the addon preferences."
-            )
-            return {"FINISHED"}
+        model_templates: dict[str, bpy.types.Object] = {}
+
+        def _candidate_obj_paths(model_name: str) -> list[Path]:
+            model_name = model_name.strip().replace('\\', '/').strip('/')
+            if not model_name:
+                return []
+
+            model_base = model_name.split('/')[-1]
+            candidates = [
+                install_dir / "resources" / "rendermodels" / model_name / f"{model_base}.obj",
+                install_dir / "resources" / "rendermodels" / model_name / "model.obj",
+                install_dir / "resources" / "rendermodels" / model_base / f"{model_base}.obj",
+                install_dir / "resources" / "rendermodels" / model_base / "model.obj",
+            ]
+
+            for driver_dir in (install_dir / "drivers").glob("*") if (install_dir / "drivers").exists() else []:
+                candidates.extend([
+                    driver_dir / "resources" / "rendermodels" / model_name / f"{model_base}.obj",
+                    driver_dir / "resources" / "rendermodels" / model_name / "model.obj",
+                    driver_dir / "resources" / "rendermodels" / model_base / f"{model_base}.obj",
+                    driver_dir / "resources" / "rendermodels" / model_base / "model.obj",
+                ])
+
+            return candidates
+
+        def _resolve_model_obj_path(tracker: OVRTracker) -> Path | None:
+            render_model_name = ""
+            try:
+                render_model_name = system.getStringTrackedDeviceProperty(tracker.index, openvr.Prop_RenderModelName_String)
+            except Exception:
+                pass
+
+            for model_name in [render_model_name, fallback_models.get(tracker.type, "")]:
+                for path in _candidate_obj_paths(model_name):
+                    if path.exists():
+                        return path
+
+            if tracker.type == str(openvr.TrackedDeviceClass_TrackingReference):
+                for model_name in fallback_lighthouse_models:
+                    for path in _candidate_obj_paths(model_name):
+                        if path.exists():
+                            return path
+
+            return None
+
+        def _get_or_import_model(path: Path) -> bpy.types.Object | None:
+            key = str(path.resolve())
+            if key in model_templates:
+                return model_templates[key]
+
+            try:
+                bpy.ops.wm.obj_import(filepath=str(path))
+            except RuntimeError:
+                return None
+
+            imported = bpy.context.object
+            if not imported:
+                return None
+
+            imported.location = (0, 0, 0)
+            imported.rotation_euler = (0, 0, 0)
+            imported.scale = (1, 1, 1)
+
+            model_templates[key] = imported
+            return imported
 
         load_trackers(ovr_context)
-
-        # Default reference transformations
-        tracker_model.location = (0, 0, 0)
-        tracker_model.rotation_euler = (0, 0, 0)
-
-        controller_model.location = (0, 0, 0)
-        controller_model.rotation_euler = (0, 0, 0)
-
-        hmd_model.location = (0, 0, 0)
-        hmd_model.rotation_euler = (0, 0, 0)
 
         # Create references
         def select_model(target_model: bpy.types.Object):
@@ -442,13 +490,12 @@ class CreateRefsOperator(bpy.types.Operator):
 
             print(">", tracker_name)
 
-            # Chose correct model
-            if tracker.type == str(openvr.TrackedDeviceClass_Controller):
-                model = controller_model
-            elif tracker.type == str(openvr.TrackedDeviceClass_HMD):
-                model = hmd_model
-            else:
-                model = tracker_model
+            model_path = _resolve_model_obj_path(tracker)
+            model = _get_or_import_model(model_path) if model_path else None
+
+            if not model:
+                print(f"Could not resolve model for {tracker_name}; skipping")
+                continue
 
             # Delete existing target
             tracker_target = bpy.data.objects.get(tracker_name)
@@ -498,10 +545,10 @@ class CreateRefsOperator(bpy.types.Operator):
             tracker_target.rotation_mode = "QUATERNION"
             tracker_joint.rotation_mode = "QUATERNION"
 
-        # Clean up
-        bpy.data.objects.remove(tracker_model)
-        bpy.data.objects.remove(controller_model)
-        bpy.data.objects.remove(hmd_model)
+        # Clean up imported template models
+        for template_obj in model_templates.values():
+            if template_obj and template_obj.name in bpy.data.objects:
+                bpy.data.objects.remove(template_obj)
 
         # Restore previous selection
         try:
