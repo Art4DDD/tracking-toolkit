@@ -1,10 +1,7 @@
 import datetime
 import ctypes
-import json
-import os
 import queue
 import threading
-from pathlib import Path
 from typing import Generator
 
 import bpy
@@ -135,87 +132,24 @@ def _resolve_tracker_name(system, device_index: int, serial: str) -> str:
 
 
 
-def _candidate_input_profile_paths(raw_input_profile_path: str) -> list[Path]:
+def _extract_input_profile_info(raw_input_profile_path: str) -> dict[str, str]:
     raw = (raw_input_profile_path or "").strip()
     if not raw:
-        return []
+        return {}
 
-    candidates: list[Path] = []
+    info: dict[str, str] = {
+        "input_profile_path_raw": raw,
+    }
+
     normalized = raw.replace("\\", "/")
-    if Path(normalized).is_absolute():
-        candidates.append(Path(normalized))
-        return candidates
-
-    steamvr_roots: list[Path] = []
-    env_root = os.environ.get("STEAMVR_PATH")
-    if env_root:
-        steamvr_roots.append(Path(env_root))
-    steamvr_roots.extend([
-        Path.home() / ".steam" / "steam" / "steamapps" / "common" / "SteamVR",
-        Path.home() / ".local" / "share" / "Steam" / "steamapps" / "common" / "SteamVR",
-        Path("C:/Program Files (x86)/Steam/steamapps/common/SteamVR"),
-    ])
-
     if normalized.startswith("{"):
         end_idx = normalized.find("}")
         if end_idx > 1:
-            driver_name = normalized[1:end_idx]
-            suffix = normalized[end_idx + 1:].lstrip("/")
-            for root in steamvr_roots:
-                candidates.append(root / "drivers" / driver_name / "resources" / suffix)
-    else:
-        rel = normalized.lstrip("/")
-        for root in steamvr_roots:
-            candidates.append(root / rel)
-            candidates.append(root / "resources" / rel)
+            info["input_profile_driver"] = normalized[1:end_idx]
+            info["input_profile_driver_relative_path"] = normalized[end_idx + 1:].lstrip("/")
 
-    seen: set[str] = set()
-    uniq: list[Path] = []
-    for c in candidates:
-        key = str(c)
-        if key in seen:
-            continue
-        seen.add(key)
-        uniq.append(c)
-    return uniq
+    return info
 
-
-def _read_input_profile_summary(raw_input_profile_path: str) -> dict[str, str]:
-    if not raw_input_profile_path:
-        return {}
-
-    for candidate in _candidate_input_profile_paths(raw_input_profile_path):
-        if not candidate.exists():
-            continue
-        try:
-            profile = json.loads(candidate.read_text(encoding="utf-8"))
-        except Exception:
-            continue
-
-        summary: dict[str, str] = {
-            "input_profile_resolved_path": str(candidate),
-        }
-
-        render_model = profile.get("render_model")
-        if isinstance(render_model, str) and render_model.strip():
-            summary["input_profile_render_model"] = render_model.strip()
-
-        hand_render_model = profile.get("hand_render_model")
-        if isinstance(hand_render_model, dict):
-            left = hand_render_model.get("left")
-            right = hand_render_model.get("right")
-            if isinstance(left, str) and left.strip():
-                summary["input_profile_hand_left"] = left.strip()
-            if isinstance(right, str) and right.strip():
-                summary["input_profile_hand_right"] = right.strip()
-
-        controller_type = profile.get("controller_type")
-        if isinstance(controller_type, str) and controller_type.strip():
-            summary["input_profile_controller_type"] = controller_type.strip()
-
-        return summary
-
-    return {}
 
 def _collect_tracker_debug_info(system, device_index: int, device_class: int) -> dict[str, str]:
     fields = {
@@ -260,7 +194,7 @@ def _collect_tracker_debug_info(system, device_index: int, device_class: int) ->
 
     input_profile_path = fields.get("inputprofilepath") or fields.get("inputprofilepath_string")
     if input_profile_path:
-        fields.update(_read_input_profile_summary(input_profile_path))
+        fields.update(_extract_input_profile_info(input_profile_path))
 
     return fields
 
