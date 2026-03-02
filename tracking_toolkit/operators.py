@@ -494,11 +494,16 @@ class CreateRefsOperator(bpy.types.Operator):
             return None
 
         def _resolve_model_obj_path(tracker: OVRTracker) -> Path | None:
+            render_model_raw = _get_prop(tracker.index, openvr.Prop_RenderModelName_String)
+            if render_model_raw:
+                print(f"[OpenVR RenderModel] device={tracker.index} serial={tracker.serial} render_model={render_model_raw}")
+
             direct_openvr_model = _resolve_openvr_model_obj_path(tracker)
             if direct_openvr_model:
+                print(f"[OpenVR ModelPath] device={tracker.index} source=openvr path={direct_openvr_model}")
                 return direct_openvr_model
 
-            render_model_name = _get_prop(tracker.index, openvr.Prop_RenderModelName_String).lower()
+            render_model_name = render_model_raw.lower()
             manufacturer = _get_prop(tracker.index, openvr.Prop_ManufacturerName_String).lower()
             model_number = _get_prop(tracker.index, openvr.Prop_ModelNumber_String).lower()
             controller_type = _get_prop(tracker.index, openvr.Prop_ControllerType_String).lower()
@@ -532,6 +537,7 @@ class CreateRefsOperator(bpy.types.Operator):
             for key in dict.fromkeys(keys):
                 for model_path in model_db.get(key, []):
                     if model_path.exists():
+                        print(f"[OpenVR ModelPath] device={tracker.index} source=fallback key={key} path={model_path}")
                         return model_path
 
             return None
