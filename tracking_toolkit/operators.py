@@ -482,20 +482,10 @@ class CreateRefsOperator(bpy.types.Operator):
             return None
 
         def _resolve_openvr_model_obj_path(tracker: OVRTracker) -> Path | None:
-            render_model_name = _get_prop(tracker.index, openvr.Prop_RenderModelName_String)
-            print(f"[OpenVR RenderModel] device={tracker.index} serial={tracker.serial} render_model={render_model_name}")
-            if not render_model_name:
-                return None
-
             render_models = openvr.VRRenderModels()
             get_original_path = getattr(render_models, "GetRenderModelOriginalPath", None)
-            method_name = "GetRenderModelOriginalPath"
             if not get_original_path:
                 get_original_path = getattr(render_models, "getRenderModelOriginalPath", None)
-                method_name = "getRenderModelOriginalPath"
-
-            if not get_original_path:
-                return None
 
             def _extract_path(result) -> str:
                 if isinstance(result, tuple):
@@ -507,84 +497,69 @@ class CreateRefsOperator(bpy.types.Operator):
                     return result.strip()
                 return ""
 
-            result = get_original_path(render_model_name)
-            original_path = _extract_path(result)
-            if original_path:
-                print(
-                    f"[OpenVR OriginalPath] device={tracker.index} model={render_model_name} "
-                    f"path={original_path} method={method_name}"
-                )
+            def _resolve_with_openvr_model(model_name: str) -> Path | None:
+                if not model_name or not get_original_path:
+                    return None
 
-            # SteamVR may resolve final visuals through component render models.
-            get_component_count = (
-                getattr(render_models, "getComponentCount", None)
-                or getattr(render_models, "GetComponentCount", None)
-            )
-            get_component_name = (
-                getattr(render_models, "getComponentName", None)
-                or getattr(render_models, "GetComponentName", None)
-            )
-            get_component_render_model_name = (
-                getattr(render_models, "getComponentRenderModelName", None)
-                or getattr(render_models, "GetComponentRenderModelName", None)
-            )
-
-            component_paths: list[str] = []
-            if get_component_count and get_component_name and get_component_render_model_name:
                 try:
-                    component_count = int(get_component_count(render_model_name))
+                    result = get_original_path(model_name)
                 except Exception:
-                    component_count = 0
+                    return None
 
-                for component_index in range(max(component_count, 0)):
-                    try:
-                        component_name_result = get_component_name(render_model_name, component_index)
-                    except Exception:
-                        continue
+                original_path = _extract_path(result)
+                if not original_path:
+                    return None
 
-                    component_name = _extract_path(component_name_result)
-                    if not component_name:
-                        continue
+                path_obj = Path(original_path)
+                print(f"[OpenVR OriginalPath] {path_obj}")
+                return path_obj
 
-                    try:
-                        component_model_result = get_component_render_model_name(render_model_name, component_name)
-                    except Exception:
-                        continue
+            render_model_name = _get_prop(tracker.index, openvr.Prop_RenderModelName_String)
+            original_path = _resolve_with_openvr_model(render_model_name)
+            if original_path:
+                return original_path
 
-                    component_model_name = _extract_path(component_model_result)
-                    if not component_model_name:
-                        continue
+            side = _controller_hand_side(tracker)
+            controller_type = _get_prop(tracker.index, getattr(openvr, "Prop_ControllerType_String", -1))
+            registered_device_type = _get_prop(tracker.index, getattr(openvr, "Prop_RegisteredDeviceType_String", -1))
+            tracking_system_name = _get_prop(tracker.index, getattr(openvr, "Prop_TrackingSystemName_String", -1))
+            model_number = _get_prop(tracker.index, getattr(openvr, "Prop_ModelNumber_String", -1))
 
-                    try:
-                        component_path_result = get_original_path(component_model_name)
-                    except Exception:
-                        continue
+            hints = [
+                render_model_name,
+                controller_type,
+                registered_device_type,
+                tracking_system_name,
+                model_number,
+                tracker.name,
+                tracker.serial,
+            ]
+            hints_lower = " ".join(h.lower() for h in hints if h)
 
-                    component_path = _extract_path(component_path_result)
-                    if not component_path:
-                        continue
+            if side in {"left", "right"} and ("pico" in hints_lower or "neo3" in hints_lower):
+                for key in (f"pico_controller_{side}",):
+                    for path in model_db.get(key, []):
+                        if path.exists():
+                            return path
 
-                    print(
-                        f"[OpenVR ComponentModel] device={tracker.index} component={component_name} "
-                        f"model={component_model_name} path={component_path}"
-                    )
-                    component_paths.append(component_path)
+            if side in {"left", "right"} and ("knuckles" in hints_lower or "index" in hints_lower):
+                for key in (f"vr_controller_knuckles_{side}",):
+                    for path in model_db.get(key, []):
+                        if path.exists():
+                            return path
 
-            chosen_path = original_path
-            if component_paths:
-                chosen_path = component_paths[0]
-                for candidate in component_paths:
-                    lower_candidate = candidate.lower()
-                    if "pico" in lower_candidate and "knuckles" in chosen_path.lower():
-                        chosen_path = candidate
-                        break
+            if "tundra" in hints_lower:
+                for path in model_db.get("tundra_tracker", []):
+                    if path.exists():
+                        return path
 
-            if not chosen_path:
-                return None
+            model_key = fallback_models.get(tracker.type)
+            if model_key:
+                for path in model_db.get(model_key, []):
+                    if path.exists():
+                        return path
 
-            path_obj = Path(chosen_path)
-            print(f"[OpenVR ModelPath] device={tracker.index} serial={tracker.serial} path={path_obj} source=render_models_api")
-            return path_obj
+            return None
 
 
 
