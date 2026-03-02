@@ -100,22 +100,48 @@ def _safe_device_property(system, device_index: int, property_id: int) -> str:
 
 
 def _normalize_tracker_name(raw_name: str) -> str:
-    normalized = " ".join((raw_name or "").replace("_", " ").replace("-", " ").split())
+    normalized = " ".join((raw_name or "").replace("\n", " ").replace("\r", " ").replace("_", " ").replace("-", " ").split())
     return normalized.strip()
 
 
-def _resolve_tracker_name(system, device_index: int, serial: str) -> str:
-    openvr_name_candidates = [
-        _safe_device_property(system, device_index, openvr.Prop_RenderModelName_String),
-        _safe_device_property(system, device_index, openvr.Prop_ModelNumber_String),
-        _safe_device_property(system, device_index, openvr.Prop_ControllerType_String),
-        _safe_device_property(system, device_index, openvr.Prop_RegisteredDeviceType_String),
+def _build_tracker_debug_name(system, device_index: int, device_class: int, serial: str) -> str:
+    string_props = [
+        ("render", openvr.Prop_RenderModelName_String),
+        ("model", openvr.Prop_ModelNumber_String),
+        ("controller_type", openvr.Prop_ControllerType_String),
+        ("registered", openvr.Prop_RegisteredDeviceType_String),
+        ("manufacturer", openvr.Prop_ManufacturerName_String),
+        ("resource_root", openvr.Prop_ResourceRoot_String),
     ]
 
-    for candidate in openvr_name_candidates:
-        normalized = _normalize_tracker_name(candidate)
-        if normalized:
-            return normalized
+    parts = [
+        f"idx={device_index}",
+        f"class={device_class}",
+    ]
+
+    if serial:
+        normalized_serial = _normalize_tracker_name(serial)
+        if normalized_serial:
+            parts.append(f"serial={normalized_serial}")
+
+    for prop_name, prop_id in string_props:
+        prop_value = _normalize_tracker_name(_safe_device_property(system, device_index, prop_id))
+        if prop_value:
+            parts.append(f"{prop_name}={prop_value}")
+
+    try:
+        role_hint = system.getInt32TrackedDeviceProperty(device_index, openvr.Prop_ControllerRoleHint_Int32)
+        parts.append(f"role={int(role_hint)}")
+    except Exception:
+        pass
+
+    return " | ".join(parts)
+
+
+def _resolve_tracker_name(system, device_index: int, device_class: int, serial: str) -> str:
+    debug_name = _build_tracker_debug_name(system, device_index, device_class, serial)
+    if debug_name:
+        return debug_name
 
     normalized_serial = _normalize_tracker_name(serial)
     if normalized_serial:
@@ -754,7 +780,7 @@ def load_trackers(ovr_context: OVRContext):
 
         device_class = system.getTrackedDeviceClass(i)
         tracker_serial = _safe_device_property(system, i, openvr.Prop_SerialNumber_String)
-        tracker_name = _resolve_tracker_name(system, i, tracker_serial)
+        tracker_name = _resolve_tracker_name(system, i, device_class, tracker_serial)
 
         existing_names = {t.name for t in ovr_context.trackers}
         unique_name = tracker_name
