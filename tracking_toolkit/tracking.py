@@ -104,10 +104,10 @@ def _get_poses(ovr_context: OVRContext) -> Generator[tuple[datetime.datetime, OV
         mat_world = bpy_extras.io_utils.axis_conversion("Z", "Y", "Y", "Z").to_4x4()
         mat_world = mat_world @ mat
 
-        # Apply scale
+        # Apply scale (use axis scale value directly; length of (1,1,1) is 1.732 and inflates transforms)
         root = bpy.data.objects.get("OVR Root")
         if root:
-            mat_world = mat_world @ Matrix.Scale(root.scale.length, 4)
+            mat_world = mat_world @ Matrix.Scale(root.scale.x, 4)
 
         yield time, tracker, mat_world
 
