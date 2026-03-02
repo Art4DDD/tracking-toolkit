@@ -1,4 +1,5 @@
 import bpy
+import re
 import openvr
 from pathlib import Path
 from mathutils import Vector
@@ -521,6 +522,8 @@ class CreateRefsOperator(bpy.types.Operator):
 
         load_trackers(ovr_context)
 
+        synthetic_serial_pattern = re.compile(r"^LHR-FFFFFFF[0-9A-F]+$", re.IGNORECASE)
+
         # Create references
         def select_model(target_model: bpy.types.Object):
             bpy.ops.object.select_all(action="DESELECT")
@@ -528,6 +531,11 @@ class CreateRefsOperator(bpy.types.Operator):
             bpy.context.view_layer.objects.active = target_model
 
         for tracker in ovr_context.trackers:
+            # Hide synthetic pseudo-devices in generated references (e.g. finger proxies),
+            # but keep them in tracker data for input/driver state handling.
+            if synthetic_serial_pattern.match(tracker.serial):
+                continue
+
             # Create new tracker empty if it doesn't exist
             tracker_name = tracker.name
 

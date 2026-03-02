@@ -389,10 +389,6 @@ def load_trackers(ovr_context: OVRContext):
         if not tracker_name:
             tracker_name = f"TrackedDevice_{i}"
 
-        # Skip synthetic pseudo-devices (commonly hands/fingers), but keep real HMD.
-        if device_class != openvr.TrackedDeviceClass_HMD and synthetic_serial_pattern.match(tracker_serial):
-            continue
-
         tracker = ovr_context.trackers.add()
         tracker.name = tracker_name
         tracker.prev_name = tracker_name
