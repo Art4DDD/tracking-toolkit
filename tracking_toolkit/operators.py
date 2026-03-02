@@ -483,112 +483,40 @@ class CreateRefsOperator(bpy.types.Operator):
 
         def _resolve_openvr_model_obj_path(tracker: OVRTracker) -> Path | None:
             render_model_name = _get_prop(tracker.index, openvr.Prop_RenderModelName_String)
-            if not render_model_name:
-                print(f"[OpenVR ModelPath] device={tracker.index} serial={tracker.serial} path=<unavailable> reason=no_render_model")
-                return None
-
             print(f"[OpenVR RenderModel] device={tracker.index} serial={tracker.serial} render_model={render_model_name}")
-
-            try:
-                render_models = openvr.VRRenderModels()
-            except Exception:
-                print(f"[OpenVR ModelPath] device={tracker.index} serial={tracker.serial} path=<unavailable> reason=no_vrrendermodels")
+            if not render_model_name:
                 return None
 
+            render_models = openvr.VRRenderModels()
             get_original_path = (
                 getattr(render_models, "getRenderModelOriginalPath", None)
                 or getattr(render_models, "GetRenderModelOriginalPath", None)
             )
             if not get_original_path:
-                print(f"[OpenVR ModelPath] device={tracker.index} serial={tracker.serial} path=<unavailable> reason=no_get_render_model_original_path")
                 return None
 
-            call_variants = [
-                lambda: get_original_path(render_model_name),
-                lambda: get_original_path(render_model_name, 1024),
-            ]
+            result = get_original_path(render_model_name)
+            original_path = ""
+            if isinstance(result, tuple):
+                if result and isinstance(result[0], str):
+                    original_path = result[0]
+                elif len(result) > 1 and isinstance(result[1], str):
+                    original_path = result[1]
+            elif isinstance(result, str):
+                original_path = result
 
-            for call in call_variants:
-                try:
-                    result = call()
-                except Exception:
-                    continue
+            original_path = (original_path or "").strip()
+            if not original_path:
+                return None
 
-                original_path = ""
-                if isinstance(result, tuple):
-                    if result and isinstance(result[0], str):
-                        original_path = result[0]
-                    elif len(result) > 1 and isinstance(result[1], str):
-                        original_path = result[1]
-                elif isinstance(result, str):
-                    original_path = result
-
-                original_path = (original_path or "").strip()
-                if not original_path:
-                    continue
-
-                path_obj = Path(original_path)
-                print(f"[OpenVR ModelPath] device={tracker.index} serial={tracker.serial} path={path_obj} exists={path_obj.exists()} source=render_models_api")
-                if path_obj.exists():
-                    return path_obj
-
-            print(f"[OpenVR ModelPath] device={tracker.index} serial={tracker.serial} path=<unavailable> reason=render_models_api_empty")
-            return None
+            path_obj = Path(original_path)
+            print(f"[OpenVR ModelPath] device={tracker.index} serial={tracker.serial} path={path_obj} source=render_models_api")
+            return path_obj
 
 
 
         def _resolve_model_obj_path(tracker: OVRTracker) -> Path | None:
-            render_model_raw = _get_prop(tracker.index, openvr.Prop_RenderModelName_String)
-
-            direct_openvr_model = _resolve_openvr_model_obj_path(tracker)
-            if direct_openvr_model:
-                return direct_openvr_model
-
-            render_model_name = render_model_raw.lower()
-            manufacturer = _get_prop(tracker.index, openvr.Prop_ManufacturerName_String).lower()
-            model_number = _get_prop(tracker.index, openvr.Prop_ModelNumber_String).lower()
-            controller_type = _get_prop(tracker.index, openvr.Prop_ControllerType_String).lower()
-            registered_type = _get_prop(tracker.index, openvr.Prop_RegisteredDeviceType_String).lower()
-            input_profile = _get_prop(tracker.index, openvr.Prop_InputProfilePath_String).lower()
-
-            keys = []
-            controller_side = _controller_hand_side(tracker)
-
-            if render_model_name:
-                keys.append(render_model_name)
-
-            is_pico = (
-                "pico" in manufacturer
-                or "pico" in model_number
-                or "pico" in render_model_name
-                or "pico" in registered_type
-                or "pico" in input_profile
-            )
-
-            if is_pico:
-                if controller_side:
-                    keys.append(f"pico_controller_{controller_side}")
-
-            if ("index" in model_number or "knuckles" in controller_type or "knuckles" in model_number) and not is_pico:
-                if controller_side:
-                    keys.append(f"vr_controller_knuckles_{controller_side}")
-
-            if "tundra" in manufacturer or "tundra" in model_number:
-                keys.append("tundra_tracker")
-
-            if tracker.type == str(openvr.TrackedDeviceClass_TrackingReference):
-                keys.extend(["lh_basestation_valve_gen2", "lh_basestation_vive"])
-
-            class_model = fallback_models.get(tracker.type)
-            if class_model:
-                keys.append(class_model)
-
-            for key in dict.fromkeys(keys):
-                for model_path in model_db.get(key, []):
-                    if model_path.exists():
-                        return model_path
-
-            return None
+            return _resolve_openvr_model_obj_path(tracker)
 
         def _get_or_import_model(path: Path) -> bpy.types.Object | None:
             key = str(path.resolve())
