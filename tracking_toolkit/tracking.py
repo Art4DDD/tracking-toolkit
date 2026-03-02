@@ -57,6 +57,18 @@ def _set_action_slot_if_supported(obj: bpy.types.Object, action: bpy.types.Actio
     except Exception:
         pass
 
+def _get_tracker_live_object(tracker: OVRTracker) -> bpy.types.Object | None:
+    if tracker.target.object:
+        return tracker.target.object
+
+    existing_obj = bpy.data.objects.get(tracker.name)
+    if existing_obj:
+        tracker.target.object = existing_obj
+        return existing_obj
+
+    return None
+
+
 def init_handles():
     vr_ipt = openvr.VRInput()
 
@@ -306,7 +318,7 @@ def _resolve_controller_targets(ovr_context: OVRContext) -> dict[str, bpy.types.
         if tracker.type != str(openvr.TrackedDeviceClass_Controller):
             continue
 
-        target_obj = tracker.target.object
+        target_obj = _get_tracker_live_object(tracker)
         if not target_obj:
             continue
 

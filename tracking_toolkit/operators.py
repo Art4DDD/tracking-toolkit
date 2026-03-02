@@ -543,11 +543,6 @@ class CreateRefsOperator(bpy.types.Operator):
             target_model.select_set(True)
             bpy.context.view_layer.objects.active = target_model
 
-        def _init_finger_properties(obj: bpy.types.Object):
-            for channel in ("thumb_curl", "index_curl", "middle_curl", "ring_curl", "pinky_curl"):
-                if channel not in obj:
-                    obj[channel] = 0.0
-
         for tracker in ovr_context.trackers:
             # Create new tracker empty if it doesn't exist
             tracker_name = tracker.name
@@ -608,10 +603,6 @@ class CreateRefsOperator(bpy.types.Operator):
             # Set up rotation modes
             tracker_target.rotation_mode = "QUATERNION"
             tracker_joint.rotation_mode = "QUATERNION"
-
-            if tracker.type == str(openvr.TrackedDeviceClass_Controller):
-                _init_finger_properties(tracker_target)
-                _init_finger_properties(tracker_joint)
 
         # Clean up imported template models
         for template_obj in model_templates.values():
