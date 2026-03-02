@@ -1,3 +1,4 @@
+import ctypes
 import datetime
 import queue
 import threading
@@ -75,7 +76,16 @@ def _get_input(ovr_context: OVRContext):
     l_ipt: OVRInput = ovr_context.l_input
     r_ipt: OVRInput = ovr_context.r_input
 
-    vr_ipt.updateActionState(action_sets)
+    # Match C++ flow: update action state with explicit element size/count when available.
+    try:
+        vr_ipt.updateActionState(action_sets, ctypes.sizeof(openvr.VRActiveActionSet_t), len(action_sets))
+    except TypeError:
+        try:
+            vr_ipt.updateActionState(action_sets)
+        except Exception:
+            return
+    except Exception:
+        return
 
     def _calc_finger_curl(bone_transforms, chain: tuple[int, ...]) -> float:
         if len(chain) < 2:
@@ -109,20 +119,36 @@ def _get_input(ovr_context: OVRContext):
         if action is None:
             return None
 
-        get_action_data_fn = getattr(vr_ipt, "getSkeletalActionData", None) or getattr(vr_ipt, "GetSkeletalActionData", None)
+        def _resolve_method(names: tuple[str, ...]):
+            for name in names:
+                method = getattr(vr_ipt, name, None)
+                if method:
+                    return method
+            return None
+
+        get_action_data_fn = _resolve_method(("getSkeletalActionData", "GetSkeletalActionData"))
         if not get_action_data_fn:
             return None
 
+        action_data = None
         try:
             action_data = get_action_data_fn(action)
+        except TypeError:
+            action_data_t = getattr(openvr, "InputSkeletalActionData_t", None)
+            if action_data_t:
+                try:
+                    action_data = action_data_t()
+                    get_action_data_fn(action, action_data, ctypes.sizeof(action_data_t))
+                except Exception:
+                    action_data = None
         except Exception:
+            action_data = None
+
+        if action_data is None or not getattr(action_data, "bActive", False):
             return None
 
-        if not getattr(action_data, "bActive", False):
-            return None
-
-        # 1) Preferred path: skeletal summary already contains per-finger curls.
-        get_summary_fn = getattr(vr_ipt, "getSkeletalSummaryData", None) or getattr(vr_ipt, "GetSkeletalSummaryData", None)
+        # 1) Preferred path: direct summary curls.
+        get_summary_fn = _resolve_method(("getSkeletalSummaryData", "GetSkeletalSummaryData"))
         if get_summary_fn:
             summary = None
             try:
@@ -131,7 +157,8 @@ def _get_input(ovr_context: OVRContext):
                 summary_data_t = getattr(openvr, "InputSkeletalSummaryData_t", None)
                 if summary_data_t:
                     try:
-                        summary = get_summary_fn(action, summary_data_t())
+                        summary = summary_data_t()
+                        get_summary_fn(action, summary, ctypes.sizeof(summary_data_t))
                     except Exception:
                         summary = None
             except Exception:
@@ -148,8 +175,8 @@ def _get_input(ovr_context: OVRContext):
                         "pinky": float(curls[4]),
                     }
 
-        # 2) Fallback path: estimate curls from skeletal bone transforms.
-        get_bone_data_fn = getattr(vr_ipt, "getSkeletalBoneData", None) or getattr(vr_ipt, "GetSkeletalBoneData", None)
+        # 2) Fallback path: estimate from bone data.
+        get_bone_data_fn = _resolve_method(("getSkeletalBoneData", "GetSkeletalBoneData"))
         if not get_bone_data_fn:
             return None
 
@@ -157,15 +184,20 @@ def _get_input(ovr_context: OVRContext):
         motion_range = getattr(openvr, "VRSkeletalMotionRange_WithController", 0)
         bone_count = getattr(openvr, "k_unSkeletonBoneCount", 31)
 
+        bone_transforms = None
         try:
             bone_transforms = get_bone_data_fn(action, transform_space, motion_range)
         except TypeError:
-            try:
-                bone_transforms = get_bone_data_fn(action, transform_space, motion_range, bone_count)
-            except Exception:
-                return None
+            bone_t = getattr(openvr, "VRBoneTransform_t", None)
+            if bone_t:
+                try:
+                    buffer = (bone_t * bone_count)()
+                    get_bone_data_fn(action, transform_space, motion_range, buffer, bone_count)
+                    bone_transforms = list(buffer)
+                except Exception:
+                    bone_transforms = None
         except Exception:
-            return None
+            bone_transforms = None
 
         if not bone_transforms:
             return None
@@ -176,6 +208,7 @@ def _get_input(ovr_context: OVRContext):
             result[finger_name] = _calc_finger_curl(bone_transforms, valid_chain)
 
         return result
+
 
     l_skeletal = _get_skeletal_finger_curls("l_skeleton")
     if l_skeletal:
