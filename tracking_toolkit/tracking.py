@@ -139,11 +139,12 @@ def _clear_buffer():
         data_buffer.clear()
 
 
-def _get_buffer() -> list[list[tuple[datetime.datetime, OVRTracker, Matrix]]]:
+def _drain_buffer() -> list[list[tuple[datetime.datetime, OVRTracker, Matrix]]]:
     global data_buffer, buffer_lock
 
     with buffer_lock:
-        buffer_copy = data_buffer.copy()
+        buffer_copy = data_buffer
+        data_buffer = []
 
     return buffer_copy
 
@@ -181,7 +182,7 @@ def _pose_vis_timer():
 
 
 def _insert_action(ovr_context: OVRContext):
-    pose_data = _get_buffer()
+    pose_data = _drain_buffer()
     num_samples = len(pose_data)
     print(f"OpenVR Processing {num_samples} recorded samples")
     if num_samples == 0:
@@ -193,15 +194,16 @@ def _insert_action(ovr_context: OVRContext):
     start_frame = ovr_context.record_start_frame
 
     animation_data = {}
+    tracker_objects = {
+        tracker.name: bpy.data.objects.get(tracker.name)
+        for tracker in ovr_context.trackers
+    }
 
     for sample in pose_data:
         for time, tracker, pose in sample:
-            tracker_obj = bpy.data.objects.get(tracker.name)
+            tracker_obj = tracker_objects.get(tracker.name)
             if not tracker_obj:
                 continue
-
-            if tracker_obj.animation_data is None:
-                tracker_obj.animation_data_create()
 
             if tracker.name not in animation_data:
                 animation_data[tracker.name] = {
@@ -209,7 +211,8 @@ def _insert_action(ovr_context: OVRContext):
                     "frames": [],
                     "locs": [],
                     "rots": [],
-                    "scales": []
+                    "scales": [],
+                    "prev_rot": None
                 }
 
             time_delta = time - take_start_time
@@ -223,14 +226,10 @@ def _insert_action(ovr_context: OVRContext):
             # -----------------------------
             data = animation_data[tracker.name]
 
-            prev_quat = None
-            if data["rots"]:
-                # берем последний записанный quaternion (Blender хранит как [w, x, y, z])
-                last_index = len(data["rots"]) - 4
-                prev_quat_list = data["rots"][last_index:last_index+4]
-                prev_quat = Quaternion(prev_quat_list)
-                if prev_quat.dot(rot) < 0:
-                    rot = -rot
+            prev_quat: Quaternion | None = data["prev_rot"]
+            if prev_quat and prev_quat.dot(rot) < 0:
+                rot = -rot
+            data["prev_rot"] = rot.copy()
             # -----------------------------
 
             # сохраняем ключевые данные
@@ -310,7 +309,6 @@ def start_recording():
 def stop_recording(ovr_context: OVRContext | None):
     stop_preview()
     _insert_action(ovr_context)
-    _clear_buffer()
     start_preview(ovr_context)
 
     print("OpenVR Recording Stopped")
