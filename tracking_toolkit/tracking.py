@@ -25,6 +25,7 @@ recording_active = False
 
 action_sets = []
 action_handles = {}
+last_skeletal_sources = {"left": None, "right": None}
 
 FINGER_CHANNELS = ("thumb_curl", "index_curl", "middle_curl", "ring_curl", "pinky_curl")
 
@@ -93,6 +94,59 @@ def _is_virtual_lhr_controller_name(name: str) -> bool:
 
 def _is_virtual_lhr_controller(tracker: OVRTracker) -> bool:
     return _is_virtual_lhr_controller_name(tracker.name)
+
+
+def _safe_getattr_bool(obj, name: str, default=False):
+    try:
+        return bool(getattr(obj, name))
+    except Exception:
+        return default
+
+
+def _resolve_origin_device_index(vr_ipt, action_data) -> int | None:
+    active_origin = getattr(action_data, "activeOrigin", 0)
+    if not active_origin:
+        return None
+
+    get_origin_info_fn = getattr(vr_ipt, "getOriginTrackedDeviceInfo", None) or getattr(vr_ipt, "GetOriginTrackedDeviceInfo", None)
+    if not get_origin_info_fn:
+        return None
+
+    info_t = getattr(openvr, "InputOriginInfo_t", None)
+    calls = [
+        lambda: get_origin_info_fn(active_origin),
+    ]
+    if info_t:
+        calls.extend([
+            lambda: get_origin_info_fn(active_origin, info_t()),
+            lambda: get_origin_info_fn(active_origin, info_t, ctypes.sizeof(info_t)),
+        ])
+
+    for c in calls:
+        try:
+            info = c()
+            if isinstance(info, tuple) and info:
+                info = info[0]
+            idx = getattr(info, "trackedDeviceIndex", None)
+            if idx is not None and idx >= 0:
+                return int(idx)
+        except Exception:
+            continue
+
+    return None
+
+
+def _find_tracker_object_by_index(ovr_context: OVRContext, device_index: int | None) -> bpy.types.Object | None:
+    if device_index is None:
+        return None
+
+    for tracker in ovr_context.trackers:
+        if tracker.index != device_index:
+            continue
+        return _get_tracker_live_object(tracker)
+
+    return None
+
 def init_handles():
     vr_ipt = openvr.VRInput()
 
@@ -123,9 +177,11 @@ def init_handles():
 
 
 def _handle_input(ovr_context: OVRContext):
+    global last_skeletal_sources
+
     controller_targets = _resolve_controller_targets(ovr_context)
 
-    left_obj = controller_targets.get("left")
+    left_obj = _find_tracker_object_by_index(ovr_context, last_skeletal_sources.get("left")) or controller_targets.get("left")
     if left_obj:
         _ensure_finger_properties(left_obj)
         left_obj["thumb_curl"] = ovr_context.l_input.thumb_curl
@@ -134,7 +190,7 @@ def _handle_input(ovr_context: OVRContext):
         left_obj["ring_curl"] = ovr_context.l_input.ring_curl
         left_obj["pinky_curl"] = ovr_context.l_input.pinky_curl
 
-    right_obj = controller_targets.get("right")
+    right_obj = _find_tracker_object_by_index(ovr_context, last_skeletal_sources.get("right")) or controller_targets.get("right")
     if right_obj:
         _ensure_finger_properties(right_obj)
         right_obj["thumb_curl"] = ovr_context.r_input.thumb_curl
@@ -197,7 +253,7 @@ def _get_input(ovr_context: OVRContext):
 
         return sum(curls) / len(curls)
 
-    def _get_skeletal_finger_curls(action_key: str) -> dict[str, float] | None:
+    def _get_skeletal_finger_curls(action_key: str) -> tuple[dict[str, float], int | None] | None:
         action = action_handles.get(action_key)
         if action is None:
             return None
@@ -210,6 +266,9 @@ def _get_input(ovr_context: OVRContext):
             action_data = get_action_data_fn(action)
         except Exception:
             return None
+
+        action_active = _safe_getattr_bool(action_data, "bActive", False)
+        origin_index = _resolve_origin_device_index(vr_ipt, action_data)
 
         # Some mixed-controller setups report inactive action data even when summary/bone data is readable.
         # Do not hard-stop on bActive here; try data retrieval paths below.
@@ -244,13 +303,16 @@ def _get_input(ovr_context: OVRContext):
         if summary is not None:
             curls = getattr(summary, "flFingerCurl", None) or getattr(summary, "fingerCurl", None)
             if curls and len(curls) >= 5:
-                return {
+                result = {
                     "thumb": float(curls[0]),
                     "index": float(curls[1]),
                     "middle": float(curls[2]),
                     "ring": float(curls[3]),
                     "pinky": float(curls[4]),
                 }
+                if (not action_active) and max(result.values()) <= 1e-4:
+                    return None
+                return result, origin_index
 
         # 2) Fallback path: estimate curls from skeletal bone transforms.
         get_bone_data_fn = getattr(vr_ipt, "getSkeletalBoneData", None) or getattr(vr_ipt, "GetSkeletalBoneData", None)
@@ -286,18 +348,26 @@ def _get_input(ovr_context: OVRContext):
             valid_chain = tuple(idx for idx in chain if idx < len(bone_transforms))
             result[finger_name] = _calc_finger_curl(bone_transforms, valid_chain)
 
-        return result
+        if (not action_active) and max(result.values()) <= 1e-4:
+            return None
+        return result, origin_index
 
-    l_skeletal = _get_skeletal_finger_curls("l_skeleton")
-    if l_skeletal:
+    global last_skeletal_sources
+
+    l_skeletal_data = _get_skeletal_finger_curls("l_skeleton")
+    if l_skeletal_data:
+        l_skeletal, l_origin = l_skeletal_data
+        last_skeletal_sources["left"] = l_origin
         l_ipt.thumb_curl = l_skeletal["thumb"]
         l_ipt.index_curl = l_skeletal["index"]
         l_ipt.middle_curl = l_skeletal["middle"]
         l_ipt.ring_curl = l_skeletal["ring"]
         l_ipt.pinky_curl = l_skeletal["pinky"]
 
-    r_skeletal = _get_skeletal_finger_curls("r_skeleton")
-    if r_skeletal:
+    r_skeletal_data = _get_skeletal_finger_curls("r_skeleton")
+    if r_skeletal_data:
+        r_skeletal, r_origin = r_skeletal_data
+        last_skeletal_sources["right"] = r_origin
         r_ipt.thumb_curl = r_skeletal["thumb"]
         r_ipt.index_curl = r_skeletal["index"]
         r_ipt.middle_curl = r_skeletal["middle"]
