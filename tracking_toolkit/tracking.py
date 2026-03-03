@@ -268,6 +268,7 @@ def _get_input(ovr_context: OVRContext):
             return None
 
         action_active = _safe_getattr_bool(action_data, "bActive", False)
+        active_origin = getattr(action_data, "activeOrigin", 0)
         origin_index = _resolve_origin_device_index(vr_ipt, action_data)
 
         # Some mixed-controller setups report inactive action data even when summary/bone data is readable.
@@ -312,6 +313,7 @@ def _get_input(ovr_context: OVRContext):
                 }
                 if (not action_active) and max(result.values()) <= 1e-4:
                     return None
+                print(f"[OpenVR] {action_key}: action_data.activeOrigin={active_origin} -> getOriginTrackedDeviceInfo -> trackedDeviceIndex={origin_index}")
                 return result, origin_index
 
         # 2) Fallback path: estimate curls from skeletal bone transforms.
@@ -350,6 +352,7 @@ def _get_input(ovr_context: OVRContext):
 
         if (not action_active) and max(result.values()) <= 1e-4:
             return None
+        print(f"[OpenVR] {action_key}: action_data.activeOrigin={active_origin} -> getOriginTrackedDeviceInfo -> trackedDeviceIndex={origin_index}")
         return result, origin_index
 
     global last_skeletal_sources
