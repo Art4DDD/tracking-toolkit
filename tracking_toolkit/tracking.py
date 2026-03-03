@@ -66,73 +66,6 @@ def _safe_getattr_bool(obj, name: str, default=False):
         return default
 
 
-def _resolve_origin_device_index(vr_ipt, action_data) -> int | None:
-    active_origin = getattr(action_data, "activeOrigin", 0)
-    if not active_origin:
-        print("[OpenVR] getOriginTrackedDeviceInfo: activeOrigin=0 (no active origin)")
-        return None
-
-    get_origin_info_fn = getattr(vr_ipt, "getOriginTrackedDeviceInfo", None) or getattr(vr_ipt, "GetOriginTrackedDeviceInfo", None)
-    if not get_origin_info_fn:
-        print(f"[OpenVR] getOriginTrackedDeviceInfo unavailable for activeOrigin={active_origin}")
-        return None
-
-    info_t = getattr(openvr, "InputOriginInfo_t", None)
-    calls = [
-        lambda: get_origin_info_fn(active_origin),
-    ]
-    if info_t:
-        calls.extend([
-            lambda: get_origin_info_fn(active_origin, info_t()),
-            lambda: get_origin_info_fn(active_origin, info_t, ctypes.sizeof(info_t)),
-        ])
-
-    for c in calls:
-        try:
-            info = c()
-            if isinstance(info, tuple) and info:
-                info = info[0]
-            idx = getattr(info, "trackedDeviceIndex", None)
-            device_path = getattr(info, "devicePath", None)
-            tracked_device_path = getattr(info, "trackedDevicePath", None)
-            raw_render_component = getattr(info, "rchRenderModelComponentName", None)
-            render_component = raw_render_component
-
-            if isinstance(raw_render_component, (bytes, bytearray)):
-                render_component = bytes(raw_render_component).split(b"\x00", 1)[0].decode("utf-8", errors="ignore")
-            elif isinstance(raw_render_component, (list, tuple)):
-                try:
-                    render_component = bytes(raw_render_component).split(b"\x00", 1)[0].decode("utf-8", errors="ignore")
-                except Exception:
-                    render_component = str(raw_render_component)
-
-            render_model_name = None
-            if idx is not None and idx >= 0:
-                try:
-                    system = openvr.VRSystem()
-                    render_model_name = system.getStringTrackedDeviceProperty(int(idx), openvr.Prop_RenderModelName_String)
-                except Exception:
-                    render_model_name = None
-
-            print(
-                f"[OpenVR] getOriginTrackedDeviceInfo(activeOrigin={active_origin}) -> "
-                f"devicePath={device_path}, "
-                f"rchRenderModelComponentName={render_component!r}, "
-                f"rchRenderModelComponentName_raw={raw_render_component!r}, "
-                f"trackedDevicePath={tracked_device_path}, "
-                f"trackedDeviceIndex={idx}, "
-                f"Prop_RenderModelName_String={render_model_name!r}"
-            )
-
-            if idx is not None and idx >= 0:
-                return int(idx)
-        except Exception as e:
-            print(f"[OpenVR] getOriginTrackedDeviceInfo(activeOrigin={active_origin}) call failed: {e}")
-            continue
-
-    return None
-
-
 def _get_or_create_root_object() -> bpy.types.Object:
     root_obj = bpy.data.objects.get("OVR Root")
     if root_obj:
@@ -248,7 +181,7 @@ def _get_input(ovr_context: OVRContext):
 
         return sum(curls) / len(curls)
 
-    def _get_skeletal_finger_curls(action_key: str) -> tuple[dict[str, float], int | None] | None:
+    def _get_skeletal_finger_curls(action_key: str) -> dict[str, float] | None:
         action = action_handles.get(action_key)
         if action is None:
             return None
@@ -263,8 +196,6 @@ def _get_input(ovr_context: OVRContext):
             return None
 
         action_active = _safe_getattr_bool(action_data, "bActive", False)
-        active_origin = getattr(action_data, "activeOrigin", 0)
-        origin_index = _resolve_origin_device_index(vr_ipt, action_data)
 
         # Some mixed-controller setups report inactive action data even when summary/bone data is readable.
         # Do not hard-stop on bActive here; try data retrieval paths below.
@@ -308,8 +239,7 @@ def _get_input(ovr_context: OVRContext):
                 }
                 if (not action_active) and max(result.values()) <= 1e-4:
                     return None
-                print(f"[OpenVR] {action_key}: action_data.activeOrigin={active_origin} -> getOriginTrackedDeviceInfo -> trackedDeviceIndex={origin_index}")
-                return result, origin_index
+                return result
 
         # 2) Fallback path: estimate curls from skeletal bone transforms.
         get_bone_data_fn = getattr(vr_ipt, "getSkeletalBoneData", None) or getattr(vr_ipt, "GetSkeletalBoneData", None)
@@ -347,21 +277,18 @@ def _get_input(ovr_context: OVRContext):
 
         if (not action_active) and max(result.values()) <= 1e-4:
             return None
-        print(f"[OpenVR] {action_key}: action_data.activeOrigin={active_origin} -> getOriginTrackedDeviceInfo -> trackedDeviceIndex={origin_index}")
-        return result, origin_index
+        return result
 
-    l_skeletal_data = _get_skeletal_finger_curls("l_skeleton")
-    if l_skeletal_data:
-        l_skeletal, _ = l_skeletal_data
+    l_skeletal = _get_skeletal_finger_curls("l_skeleton")
+    if l_skeletal:
         l_ipt.thumb_curl = l_skeletal["thumb"]
         l_ipt.index_curl = l_skeletal["index"]
         l_ipt.middle_curl = l_skeletal["middle"]
         l_ipt.ring_curl = l_skeletal["ring"]
         l_ipt.pinky_curl = l_skeletal["pinky"]
 
-    r_skeletal_data = _get_skeletal_finger_curls("r_skeleton")
-    if r_skeletal_data:
-        r_skeletal, _ = r_skeletal_data
+    r_skeletal = _get_skeletal_finger_curls("r_skeleton")
+    if r_skeletal:
         r_ipt.thumb_curl = r_skeletal["thumb"]
         r_ipt.index_curl = r_skeletal["index"]
         r_ipt.middle_curl = r_skeletal["middle"]

@@ -235,20 +235,34 @@ class CreateRefsOperator(bpy.types.Operator):
 
             tracker_target = bpy.data.objects.get(tracker_name)
             if tracker_target:
+                for child in list(tracker_target.children):
+                    bpy.data.objects.remove(child)
                 bpy.data.objects.remove(tracker_target)
 
-            select_model(model)
-            bpy.ops.object.duplicate()
+            visual_name = f"{tracker_name} Visual"
+            old_visual = bpy.data.objects.get(visual_name)
+            if old_visual:
+                bpy.data.objects.remove(old_visual)
 
+            bpy.ops.object.empty_add(type="CUBE", location=(0, 0, 0))
             tracker_target = bpy.context.object
             tracker_target.name = tracker_name
             tracker_target.show_name = True
             tracker_target.hide_render = True
+            tracker_target.rotation_mode = "QUATERNION"
+            tracker_target.parent = root_empty
+
+            select_model(model)
+            bpy.ops.object.duplicate()
+
+            tracker_visual = bpy.context.object
+            tracker_visual.name = visual_name
+            tracker_visual.parent = tracker_target
+            tracker_visual.location = (0, 0, 0)
+            tracker_visual.rotation_euler = (0, 0, 0)
+            tracker_visual.scale = (1, 1, 1)
 
             tracker.target.object = tracker_target
-
-            tracker_target.parent = root_empty
-            tracker_target.rotation_mode = "QUATERNION"
 
         for template_obj in model_templates.values():
             if template_obj and template_obj.name in bpy.data.objects:
