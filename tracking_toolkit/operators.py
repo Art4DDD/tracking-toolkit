@@ -1,5 +1,6 @@
 import bpy
 import openvr
+import time
 from mathutils import Vector
 from pathlib import Path
 
@@ -165,8 +166,7 @@ class CreateRefsOperator(bpy.types.Operator):
             root_empty.name = "OVR Root"
             root_empty.empty_display_size = 0.1
 
-        preferences: Preferences | None = context.preferences.addons[base_package].preferences
-        install_dir = Path(preferences.steamvr_installation_path)
+        _preferences: Preferences | None = context.preferences.addons[base_package].preferences
 
         system = openvr.VRSystem()
 
@@ -178,40 +178,6 @@ class CreateRefsOperator(bpy.types.Operator):
         }
 
         model_templates: dict[str, bpy.types.Object] = {}
-
-        model_db = {
-            "vr_controller_knuckles_left": [
-                install_dir / "drivers" / "indexcontroller" / "resources" / "rendermodels" / "valve_controller_knu_ev2_0_left" / "valve_controller_knu_ev2_0_left.obj",
-            ],
-            "vr_controller_knuckles_right": [
-                install_dir / "drivers" / "indexcontroller" / "resources" / "rendermodels" / "valve_controller_knu_ev2_0_right" / "valve_controller_knu_ev2_0_right.obj",
-            ],
-            "pico_controller_left": [
-                install_dir / "drivers" / "vrlink" / "resources" / "rendermodels" / "pico_4_controller_left" / "pico_4_controller_left.obj",
-            ],
-            "pico_controller_right": [
-                install_dir / "drivers" / "vrlink" / "resources" / "rendermodels" / "pico_4_controller_right" / "pico_4_controller_right.obj",
-            ],
-            "tundra_tracker": [
-                install_dir / "drivers" / "tundra_labs" / "resources" / "rendermodels" / "tundra_tracker" / "tundra_tracker.obj",
-            ],
-            "lh_basestation_valve_gen2": [
-                install_dir / "resources" / "rendermodels" / "lh_basestation_valve_gen2" / "lh_basestation_valve_gen2.obj",
-            ],
-            "lh_basestation_vive": [
-                install_dir / "resources" / "rendermodels" / "lh_basestation_vive" / "lh_basestation_vive.obj",
-            ],
-            "vr_tracker_vive_3_0": [
-                install_dir / "drivers" / "htc" / "resources" / "rendermodels" / "vr_tracker_vive_3_0" / "vr_tracker_vive_3_0.obj",
-                install_dir / "resources" / "rendermodels" / "vr_tracker_vive_3_0" / "vr_tracker_vive_3_0.obj",
-            ],
-            "vr_controller_vive_1_5": [
-                install_dir / "resources" / "rendermodels" / "vr_controller_vive_1_5" / "vr_controller_vive_1_5.obj",
-            ],
-            "generic_hmd": [
-                install_dir / "resources" / "rendermodels" / "generic_hmd" / "generic_hmd.obj",
-            ],
-        }
 
         def _get_prop(index: int, prop: int) -> str:
             try:
@@ -235,13 +201,22 @@ class CreateRefsOperator(bpy.types.Operator):
                 return "right"
             return None
 
-        def _resolve_model_obj_path(tracker: OVRTracker) -> Path | None:
+        vr_render_models = openvr.VRRenderModels()
+
+        def _normalize_render_model_name(name: str) -> str:
+            return (name or "").strip().replace("\\", "/").split("/")[-1]
+
+        def _resolve_model_name(tracker: OVRTracker) -> str | None:
             manufacturer = _get_prop(tracker.index, openvr.Prop_ManufacturerName_String).lower()
             model_number = _get_prop(tracker.index, openvr.Prop_ModelNumber_String).lower()
             controller_type = _get_prop(tracker.index, openvr.Prop_ControllerType_String).lower()
+            render_model_name = _normalize_render_model_name(_get_prop(tracker.index, openvr.Prop_RenderModelName_String))
 
             keys = []
             controller_side = _controller_hand_side(tracker)
+
+            if render_model_name:
+                keys.append(render_model_name)
 
             if "index" in model_number or "knuckles" in controller_type or "knuckles" in model_number:
                 if controller_side:
@@ -262,40 +237,89 @@ class CreateRefsOperator(bpy.types.Operator):
                 keys.append(class_model)
 
             for key in dict.fromkeys(keys):
-                for model_path in model_db.get(key, []):
-                    if model_path.exists():
-                        return model_path
-
+                if key:
+                    return key
             return None
 
-        def _get_or_import_model(path: Path) -> list[bpy.types.Object] | None:
-            key = str(path.resolve())
-            if key in model_templates:
-                return model_templates[key]
+        def _extract_vertex_position(vertex) -> tuple[float, float, float]:
+            pos = getattr(vertex, "vPosition", None)
+            if hasattr(pos, "v"):
+                return float(pos.v[0]), float(pos.v[1]), float(pos.v[2])
+            if isinstance(pos, (tuple, list)) and len(pos) >= 3:
+                return float(pos[0]), float(pos[1]), float(pos[2])
+            return 0.0, 0.0, 0.0
 
-            before = set(bpy.data.objects)
+        def _load_render_model_mesh(model_name: str) -> bpy.types.Mesh | None:
+            model = None
+            for _ in range(5000):
+                try:
+                    result = vr_render_models.loadRenderModel_Async(model_name)
+                except Exception as exc:
+                    if exc.__class__.__name__ == "RenderModelError_Loading":
+                        time.sleep(0.001)
+                        continue
+                    return None
+
+                if isinstance(result, tuple):
+                    if len(result) >= 2:
+                        error, model = result[0], result[1]
+                        loading_error = getattr(openvr, "VRRenderModelError_Loading", 100)
+                        ok_error = getattr(openvr, "VRRenderModelError_None", 0)
+                        if error == loading_error:
+                            time.sleep(0.001)
+                            continue
+                        if error != ok_error:
+                            return None
+                    elif len(result) == 1:
+                        model = result[0]
+                else:
+                    model = result
+
+                if model is not None:
+                    break
+
+            if model is None:
+                return None
+
             try:
-                bpy.ops.wm.obj_import(filepath=str(path))
-            except RuntimeError:
+                vertex_count = int(getattr(model, "unVertexCount", 0))
+                triangle_count = int(getattr(model, "unTriangleCount", 0))
+                if vertex_count <= 0 or triangle_count <= 0:
+                    return None
+
+                vertices = [_extract_vertex_position(model.rVertexData[i]) for i in range(vertex_count)]
+                index_count = triangle_count * 3
+                indices = [int(model.rIndexData[i]) for i in range(index_count)]
+                faces = [tuple(indices[i:i + 3]) for i in range(0, index_count, 3)]
+
+                mesh = bpy.data.meshes.new(f"{model_name} Template Mesh")
+                mesh.from_pydata(vertices, [], faces)
+                mesh.update()
+                return mesh
+            finally:
+                try:
+                    vr_render_models.freeRenderModel(model)
+                except Exception:
+                    pass
+
+        def _get_or_import_model(model_name: str) -> list[bpy.types.Object] | None:
+            if model_name in model_templates:
+                return model_templates[model_name]
+
+            mesh = _load_render_model_mesh(model_name)
+            if not mesh:
                 return None
 
-            imported_objects = [obj for obj in bpy.data.objects if obj not in before]
-            if not imported_objects:
-                return None
-
-            imported_set = set(imported_objects)
-            root_objects = [obj for obj in imported_objects if obj.parent not in imported_set]
-            if not root_objects:
-                root_objects = imported_objects
-
-            for imported in root_objects:
-                imported.location = (0, 0, 0)
-                imported.rotation_euler = (0, 0, 0)
-                imported.scale = (1, 1, 1)
-
-            _set_disable_selection(root_objects)
-            model_templates[key] = root_objects
-            return root_objects
+            obj = bpy.data.objects.new(f"{model_name} Template", mesh)
+            context.scene.collection.objects.link(obj)
+            obj.location = (0, 0, 0)
+            obj.rotation_euler = (0, 0, 0)
+            obj.scale = (1, 1, 1)
+            obj.hide_render = True
+            obj.show_name = False
+            _set_disable_selection([obj])
+            model_templates[model_name] = [obj]
+            return [obj]
 
         def _duplicate_hierarchy(root_obj: bpy.types.Object, parent_obj: bpy.types.Object) -> bpy.types.Object:
             duplicated_by_source = {}
@@ -324,8 +348,8 @@ class CreateRefsOperator(bpy.types.Operator):
             tracker_name = tracker.name
             print(">", tracker_name)
 
-            model_path = _resolve_model_obj_path(tracker)
-            model_roots = _get_or_import_model(model_path) if model_path else None
+            model_name = _resolve_model_name(tracker)
+            model_roots = _get_or_import_model(model_name) if model_name else None
             if not model_roots:
                 print(f"Could not resolve model for {tracker_name}; skipping")
                 continue
