@@ -3,9 +3,8 @@ import openvr
 from pathlib import Path
 from mathutils import Vector
 
-from .properties import Preferences, OVRTransform, OVRContext, OVRTracker
+from .properties import OVRTransform, OVRContext, OVRTracker
 from .tracking import load_trackers, start_recording, stop_recording, start_preview, stop_preview, init_handles
-from .. import __package__ as base_package
 
 
 class BuildArmatureOperator(bpy.types.Operator):
@@ -408,55 +407,10 @@ class CreateRefsOperator(bpy.types.Operator):
 
         # Import models
 
-        # Get model paths from preferences
-        preferences: Preferences | None = context.preferences.addons[base_package].preferences
-        install_dir = Path(preferences.steamvr_installation_path)
-
         system = openvr.VRSystem()
-
-        fallback_models = {
-            str(openvr.TrackedDeviceClass_GenericTracker): "vr_tracker_vive_3_0",
-            str(openvr.TrackedDeviceClass_Controller): "vr_controller_vive_1_5",
-            str(openvr.TrackedDeviceClass_HMD): "generic_hmd",
-            str(openvr.TrackedDeviceClass_TrackingReference): "lh_basestation_valve_gen2",
-        }
+        render_models = openvr.VRRenderModels()
 
         model_templates: dict[str, bpy.types.Object] = {}
-
-        # Static model database (explicit known model paths, no directory scanning)
-        model_db = {
-            "vr_controller_knuckles_left": [
-                install_dir / "drivers" / "indexcontroller" / "resources" / "rendermodels" / "valve_controller_knu_ev2_0_left" / "valve_controller_knu_ev2_0_left.obj",
-            ],
-            "vr_controller_knuckles_right": [
-                install_dir / "drivers" / "indexcontroller" / "resources" / "rendermodels" / "valve_controller_knu_ev2_0_right" / "valve_controller_knu_ev2_0_right.obj",
-            ],
-            "pico_controller_left": [
-                install_dir / "drivers" / "vrlink" / "resources" / "rendermodels" / "pico_4_controller_left" / "pico_4_controller_left.obj",
-            ],
-            "pico_controller_right": [
-                install_dir / "drivers" / "vrlink" / "resources" / "rendermodels" / "pico_4_controller_right" / "pico_4_controller_right.obj",
-            ],
-            "tundra_tracker": [
-                install_dir / "drivers" / "tundra_labs" / "resources" / "rendermodels" / "tundra_tracker" / "tundra_tracker.obj",
-            ],
-            "lh_basestation_valve_gen2": [
-                install_dir / "resources" / "rendermodels" / "lh_basestation_valve_gen2" / "lh_basestation_valve_gen2.obj",
-            ],
-            "lh_basestation_vive": [
-                install_dir / "resources" / "rendermodels" / "lh_basestation_vive" / "lh_basestation_vive.obj",
-            ],
-            "vr_tracker_vive_3_0": [
-                install_dir / "drivers" / "htc" / "resources" / "rendermodels" / "vr_tracker_vive_3_0" / "vr_tracker_vive_3_0.obj",
-                install_dir / "resources" / "rendermodels" / "vr_tracker_vive_3_0" / "vr_tracker_vive_3_0.obj",
-            ],
-            "vr_controller_vive_1_5": [
-                install_dir / "resources" / "rendermodels" / "vr_controller_vive_1_5" / "vr_controller_vive_1_5.obj",
-            ],
-            "generic_hmd": [
-                install_dir / "resources" / "rendermodels" / "generic_hmd" / "generic_hmd.obj",
-            ],
-        }
 
         def _get_prop(index: int, prop: int) -> str:
             try:
@@ -464,53 +418,32 @@ class CreateRefsOperator(bpy.types.Operator):
             except Exception:
                 return ""
 
-        def _get_prop_int(index: int, prop: int) -> int | None:
-            try:
-                return system.getInt32TrackedDeviceProperty(index, prop)
-            except Exception:
+        def _resolve_model_obj_path(tracker: OVRTracker) -> Path | None:
+            render_model_name = _get_prop(tracker.index, openvr.Prop_RenderModelName_String)
+            if not render_model_name:
                 return None
 
-        def _controller_hand_side(tracker: OVRTracker) -> str | None:
-            role = _get_prop_int(tracker.index, openvr.Prop_ControllerRoleHint_Int32)
-            left_role = getattr(openvr, "TrackedControllerRole_LeftHand", 1)
-            right_role = getattr(openvr, "TrackedControllerRole_RightHand", 2)
+            for method_name in ("getRenderModelOriginalPath", "GetRenderModelOriginalPath"):
+                method = getattr(render_models, method_name, None)
+                if not method:
+                    continue
 
-            if role == left_role:
-                return "left"
-            if role == right_role:
-                return "right"
-            return None
+                try:
+                    raw_path = method(render_model_name)
+                except TypeError:
+                    continue
+                except Exception:
+                    return None
 
-        def _resolve_model_obj_path(tracker: OVRTracker) -> Path | None:
-            manufacturer = _get_prop(tracker.index, openvr.Prop_ManufacturerName_String).lower()
-            model_number = _get_prop(tracker.index, openvr.Prop_ModelNumber_String).lower()
-            controller_type = _get_prop(tracker.index, openvr.Prop_ControllerType_String).lower()
+                if isinstance(raw_path, tuple):
+                    raw_path = raw_path[0] if raw_path else ""
 
-            keys = []
-            controller_side = _controller_hand_side(tracker)
+                if not raw_path:
+                    continue
 
-            if "index" in model_number or "knuckles" in controller_type or "knuckles" in model_number:
-                if controller_side:
-                    keys.append(f"vr_controller_knuckles_{controller_side}")
-
-            if "pico" in manufacturer or "pico" in model_number:
-                if controller_side:
-                    keys.append(f"pico_controller_{controller_side}")
-
-            if "tundra" in manufacturer or "tundra" in model_number:
-                keys.append("tundra_tracker")
-
-            if tracker.type == str(openvr.TrackedDeviceClass_TrackingReference):
-                keys.extend(["lh_basestation_valve_gen2", "lh_basestation_vive"])
-
-            class_model = fallback_models.get(tracker.type)
-            if class_model:
-                keys.append(class_model)
-
-            for key in dict.fromkeys(keys):
-                for model_path in model_db.get(key, []):
-                    if model_path.exists():
-                        return model_path
+                model_path = Path(raw_path)
+                if model_path.exists():
+                    return model_path
 
             return None
 
