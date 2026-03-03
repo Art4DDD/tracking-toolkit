@@ -104,7 +104,7 @@ class CreateRefsOperator(bpy.types.Operator):
 
         def _set_disable_selection(roots: list[bpy.types.Object]):
             for item in _iter_hierarchy(roots):
-                if item.get("_ovr_bounds_mesh"):
+                if item.get("_ovr_tracker_box"):
                     continue
                 item.hide_select = True
 
@@ -146,36 +146,34 @@ class CreateRefsOperator(bpy.types.Operator):
 
             return min_corner, max_corner
 
-        def _find_bounds_mesh(parent_obj: bpy.types.Object) -> bpy.types.Object | None:
-            for child in parent_obj.children:
-                if child.get("_ovr_bounds_mesh"):
-                    return child
-            return None
+        def _ensure_tracker_box(tracker_name: str) -> bpy.types.Object:
+            tracker_obj = bpy.data.objects.get(tracker_name)
+            if tracker_obj and tracker_obj.type == "MESH" and tracker_obj.get("_ovr_tracker_box"):
+                return tracker_obj
 
-        def _ensure_bounds_mesh(parent_obj: bpy.types.Object) -> bpy.types.Object:
-            bounds_obj = _find_bounds_mesh(parent_obj)
-            if bounds_obj and bounds_obj.type == "MESH":
-                return bounds_obj
+            tracker_children = []
+            if tracker_obj:
+                tracker_children = list(tracker_obj.children)
+                bpy.data.objects.remove(tracker_obj)
 
-            if bounds_obj and bounds_obj.name in bpy.data.objects:
-                bpy.data.objects.remove(bounds_obj)
+            tracker_mesh = bpy.data.meshes.new(f"{tracker_name} Mesh")
+            tracker_obj = bpy.data.objects.new(tracker_name, tracker_mesh)
+            context.collection.objects.link(tracker_obj)
+            tracker_obj.show_name = True
+            tracker_obj.hide_render = True
+            tracker_obj.hide_select = False
+            tracker_obj.display_type = "WIRE"
+            tracker_obj.show_in_front = True
+            tracker_obj.rotation_mode = "QUATERNION"
+            tracker_obj["_ovr_tracker_box"] = True
 
-            bounds_mesh = bpy.data.meshes.new(f"{parent_obj.name} Bounds Mesh")
-            bounds_obj = bpy.data.objects.new(parent_obj.name, bounds_mesh)
-            context.collection.objects.link(bounds_obj)
-            bounds_obj.parent = parent_obj
-            bounds_obj.location = (0.0, 0.0, 0.0)
-            bounds_obj.hide_render = True
-            bounds_obj.show_name = False
-            bounds_obj.hide_select = False
-            bounds_obj.display_type = "WIRE"
-            bounds_obj.show_in_front = True
-            bounds_obj["_ovr_bounds_mesh"] = True
-            return bounds_obj
+            for child in tracker_children:
+                child.parent = tracker_obj
 
-        def _fit_bounds_mesh(parent_obj: bpy.types.Object, roots: list[bpy.types.Object]):
-            min_corner, max_corner = _compute_local_bounds(roots, parent_obj)
-            bounds_obj = _ensure_bounds_mesh(parent_obj)
+            return tracker_obj
+
+        def _fit_tracker_box(tracker_obj: bpy.types.Object, roots: list[bpy.types.Object]):
+            min_corner, max_corner = _compute_local_bounds(roots, tracker_obj)
 
             verts = [
                 (min_corner.x, min_corner.y, min_corner.z),
@@ -193,10 +191,10 @@ class CreateRefsOperator(bpy.types.Operator):
                 (0, 4), (1, 5), (2, 6), (3, 7),
             ]
 
-            bounds_mesh = bounds_obj.data
-            bounds_mesh.clear_geometry()
-            bounds_mesh.from_pydata(verts, edges, [])
-            bounds_mesh.update()
+            tracker_mesh = tracker_obj.data
+            tracker_mesh.clear_geometry()
+            tracker_mesh.from_pydata(verts, edges, [])
+            tracker_mesh.update()
 
         root_empty = bpy.data.objects.get("OVR Root")
         if not root_empty:
@@ -370,25 +368,15 @@ class CreateRefsOperator(bpy.types.Operator):
                 print(f"Could not resolve model for {tracker_name}; skipping")
                 continue
 
-            tracker_target = bpy.data.objects.get(tracker_name)
-            if tracker_target:
-                tracker_target.parent = root_empty
-                visual_children = [child for child in tracker_target.children if not child.get("_ovr_bounds_mesh")]
-                if visual_children:
-                    _fit_bounds_mesh(tracker_target, visual_children)
-                _set_disable_selection(list(tracker_target.children))
+            tracker_target = _ensure_tracker_box(tracker_name)
+            tracker_target.parent = root_empty
+
+            existing_visual_children = [child for child in tracker_target.children]
+            if existing_visual_children:
+                _fit_tracker_box(tracker_target, existing_visual_children)
+                _set_disable_selection(existing_visual_children)
                 tracker.target.object = tracker_target
                 continue
-
-            bpy.ops.object.empty_add(type="CUBE", location=(0, 0, 0))
-            tracker_target = bpy.context.object
-            tracker_target.name = tracker_name
-            tracker_target.empty_display_type = "PLAIN_AXES"
-            tracker_target.empty_display_size = 0.02
-            tracker_target.show_name = True
-            tracker_target.hide_render = True
-            tracker_target.rotation_mode = "QUATERNION"
-            tracker_target.parent = root_empty
 
             duplicated_roots = []
             for model_root in model_roots:
@@ -400,7 +388,7 @@ class CreateRefsOperator(bpy.types.Operator):
                     dup_root.name = f"{tracker_name} Visual"
 
             _set_disable_selection(duplicated_roots)
-            _fit_bounds_mesh(tracker_target, duplicated_roots)
+            _fit_tracker_box(tracker_target, duplicated_roots)
             tracker.target.object = tracker_target
 
         for template_roots in model_templates.values():
