@@ -385,6 +385,7 @@ class CreateRefsOperator(bpy.types.Operator):
 
             existing_visual_children = [child for child in tracker_target.children]
             if existing_visual_children:
+                context.view_layer.update()
                 _fit_tracker_box(tracker_target, existing_visual_children)
                 _set_disable_selection(existing_visual_children)
                 tracker.target.object = tracker_target
@@ -400,6 +401,7 @@ class CreateRefsOperator(bpy.types.Operator):
                     dup_root.name = f"{tracker_name} Visual"
 
             _set_disable_selection(duplicated_roots)
+            context.view_layer.update()
             _fit_tracker_box(tracker_target, duplicated_roots)
             tracker.target.object = tracker_target
 
