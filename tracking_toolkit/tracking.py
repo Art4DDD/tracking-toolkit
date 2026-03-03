@@ -276,6 +276,7 @@ def _collect_explicit_openvr_debug_props(system, device_index: int) -> dict[str,
     _read_str("Prop_HardwareRevision_String", "Prop_HardwareRevision_String")
     _read_str("Prop_FirmwareDateCode_String", "Prop_FirmwareDateCode_String")
     _read_str("Prop_RegisteredDeviceType_String", "Prop_RegisteredDeviceType_String")
+    _read_str("Prop_ResourceRoot_String", "Prop_ResourceRoot_String")
     _read_str("Prop_ConnectedWirelessDevice_String", "Prop_ConnectedWirelessDevice_String", "Prop_ConnectedWirelessDongle_String")
     _read_str("Prop_InputProfilePath_String", "Prop_InputProfilePath_String")
 
