@@ -8,6 +8,16 @@ from .tracking import _get_poses, load_trackers, start_recording, stop_recording
 from .. import __package__ as base_package
 
 
+TRACKER_BOX_DEFAULT_HALF_EXTENT = 0.025
+TRACKER_BOX_MIN_AXIS_SIZE = 0.01
+TRACKER_BOX_MIN_AXIS_PADDING = 0.005
+TRACKER_BOX_EDGES = [
+    (0, 1), (1, 2), (2, 3), (3, 0),
+    (4, 5), (5, 6), (6, 7), (7, 4),
+    (0, 4), (1, 5), (2, 6), (3, 7),
+]
+
+
 class ToggleRecordOperator(bpy.types.Operator):
     bl_idname = "id.toggle_recording"
     bl_label = "Toggle OpenVR recording"
@@ -127,22 +137,17 @@ class CreateRefsOperator(bpy.types.Operator):
                     points.append(local_corner)
 
             if not points:
-                return Vector((-0.025, -0.025, -0.025)), Vector((0.025, 0.025, 0.025))
+                return Vector((-TRACKER_BOX_DEFAULT_HALF_EXTENT, -TRACKER_BOX_DEFAULT_HALF_EXTENT, -TRACKER_BOX_DEFAULT_HALF_EXTENT)), Vector((TRACKER_BOX_DEFAULT_HALF_EXTENT, TRACKER_BOX_DEFAULT_HALF_EXTENT, TRACKER_BOX_DEFAULT_HALF_EXTENT))
 
             min_corner = Vector((min(p.x for p in points), min(p.y for p in points), min(p.z for p in points)))
             max_corner = Vector((max(p.x for p in points), max(p.y for p in points), max(p.z for p in points)))
 
-            if abs(max_corner.x - min_corner.x) < 0.01:
-                min_corner.x -= 0.005
-                max_corner.x += 0.005
-
-            if abs(max_corner.y - min_corner.y) < 0.01:
-                min_corner.y -= 0.005
-                max_corner.y += 0.005
-
-            if abs(max_corner.z - min_corner.z) < 0.01:
-                min_corner.z -= 0.005
-                max_corner.z += 0.005
+            for axis in ("x", "y", "z"):
+                axis_min = getattr(min_corner, axis)
+                axis_max = getattr(max_corner, axis)
+                if abs(axis_max - axis_min) < TRACKER_BOX_MIN_AXIS_SIZE:
+                    setattr(min_corner, axis, axis_min - TRACKER_BOX_MIN_AXIS_PADDING)
+                    setattr(max_corner, axis, axis_max + TRACKER_BOX_MIN_AXIS_PADDING)
 
             return min_corner, max_corner
 
@@ -190,15 +195,9 @@ class CreateRefsOperator(bpy.types.Operator):
                 (max_corner.x, max_corner.y, max_corner.z),
                 (min_corner.x, max_corner.y, max_corner.z),
             ]
-            edges = [
-                (0, 1), (1, 2), (2, 3), (3, 0),
-                (4, 5), (5, 6), (6, 7), (7, 4),
-                (0, 4), (1, 5), (2, 6), (3, 7),
-            ]
-
             tracker_mesh = tracker_obj.data
             tracker_mesh.clear_geometry()
-            tracker_mesh.from_pydata(verts, edges, [(0, 1, 2, 3), (4, 5, 6, 7), (0, 1, 5, 4), (1, 2, 6, 5), (2, 3, 7, 6), (3, 0, 4, 7)])
+            tracker_mesh.from_pydata(verts, TRACKER_BOX_EDGES, [])
             tracker_mesh.update()
 
         root_empty = bpy.data.objects.get("OVR Root")
