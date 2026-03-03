@@ -9,7 +9,7 @@ import bpy_extras
 import openvr
 from mathutils import Matrix, Quaternion
 
-from .properties import OVRContext, OVRTracker, OVRInput
+from .properties import OVRContext, OVRTracker
 
 # Shared variables
 
@@ -446,7 +446,7 @@ def _insert_action(ovr_context: OVRContext):
     print(f"OpenVR Processing {num_pose_samples} pose samples and {num_input_samples} finger samples")
 
     if num_pose_samples == 0 and num_input_samples == 0:
-        print(f"OpenVR Found no samples to process")
+        print("OpenVR Found no samples to process")
         return
 
     if num_pose_samples > 0:
@@ -693,7 +693,11 @@ def load_trackers(ovr_context: OVRContext):
     ovr_context.trackers.clear()
 
     for i in range(openvr.k_unMaxTrackedDeviceCount):
-        if system.getTrackedDeviceClass(i) == openvr.TrackedDeviceClass_Invalid:
+        if not bool(system.isTrackedDeviceConnected(i)):
+            continue
+
+        device_class = system.getTrackedDeviceClass(i)
+        if device_class == openvr.TrackedDeviceClass_Invalid:
             continue
 
         tracker_serial = system.getStringTrackedDeviceProperty(i, openvr.Prop_SerialNumber_String)
@@ -701,6 +705,6 @@ def load_trackers(ovr_context: OVRContext):
         tracker.name = tracker_serial
         tracker.prev_name = tracker_serial
         tracker.serial = tracker_serial
-        tracker.type = str(system.getTrackedDeviceClass(i))
+        tracker.type = str(device_class)
         tracker.index = i
-        tracker.connected = bool(system.isTrackedDeviceConnected(i))  # Just in case, do it for both
+        tracker.connected = True
