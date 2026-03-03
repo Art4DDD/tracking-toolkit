@@ -125,38 +125,58 @@ class CreateRefsOperator(bpy.types.Operator):
                     points.append(local_corner)
 
             if not points:
-                return Vector((0.0, 0.0, 0.0)), Vector((0.05, 0.05, 0.05))
+                return Vector((-0.025, 0.0, -0.025)), Vector((0.025, 0.0, 0.025))
 
             min_corner = Vector((min(p.x for p in points), min(p.y for p in points), min(p.z for p in points)))
             max_corner = Vector((max(p.x for p in points), max(p.y for p in points), max(p.z for p in points)))
-            center = (min_corner + max_corner) * 0.5
-            dimensions = max_corner - min_corner
-            dimensions.x = max(dimensions.x, 0.01)
-            dimensions.y = max(dimensions.y, 0.01)
-            dimensions.z = max(dimensions.z, 0.01)
-            return center, dimensions
+            if abs(max_corner.x - min_corner.x) < 0.01:
+                min_corner.x -= 0.005
+                max_corner.x += 0.005
+
+            if abs(max_corner.z - min_corner.z) < 0.01:
+                min_corner.z -= 0.005
+                max_corner.z += 0.005
+
+            return min_corner, max_corner
 
         def _ensure_bounds_empty(parent_obj: bpy.types.Object) -> bpy.types.Object:
             bounds_name = f"{parent_obj.name} Bounds"
             bounds_obj = bpy.data.objects.get(bounds_name)
-            if bounds_obj and bounds_obj.parent == parent_obj:
+            if bounds_obj and bounds_obj.parent == parent_obj and bounds_obj.type == "MESH":
                 return bounds_obj
 
-            bpy.ops.object.empty_add(type="CUBE", location=(0, 0, 0))
-            bounds_obj = bpy.context.object
-            bounds_obj.name = bounds_name
+            if bounds_obj and bounds_obj.name in bpy.data.objects:
+                bpy.data.objects.remove(bounds_obj)
+
+            bounds_mesh = bpy.data.meshes.new(f"{bounds_name} Mesh")
+            bounds_obj = bpy.data.objects.new(bounds_name, bounds_mesh)
+            context.collection.objects.link(bounds_obj)
             bounds_obj.parent = parent_obj
+            bounds_obj.location = (0.0, 0.0, 0.0)
             bounds_obj.hide_select = True
             bounds_obj.hide_render = True
             bounds_obj.show_name = False
-            bounds_obj.empty_display_size = 1.0
+            bounds_obj.display_type = "WIRE"
+            bounds_obj.show_in_front = True
             return bounds_obj
 
         def _fit_bounds_empty(parent_obj: bpy.types.Object, roots: list[bpy.types.Object]):
-            center, dimensions = _compute_local_bounds(roots, parent_obj)
+            min_corner, max_corner = _compute_local_bounds(roots, parent_obj)
             bounds_obj = _ensure_bounds_empty(parent_obj)
-            bounds_obj.location = center
-            bounds_obj.scale = (max(dimensions.x * 0.5, 0.005), max(dimensions.y * 0.5, 0.005), max(dimensions.z * 0.5, 0.005))
+
+            y = (min_corner.y + max_corner.y) * 0.5
+            verts = [
+                (min_corner.x, y, min_corner.z),
+                (max_corner.x, y, min_corner.z),
+                (max_corner.x, y, max_corner.z),
+                (min_corner.x, y, max_corner.z),
+            ]
+            edges = [(0, 1), (1, 2), (2, 3), (3, 0)]
+
+            bounds_mesh = bounds_obj.data
+            bounds_mesh.clear_geometry()
+            bounds_mesh.from_pydata(verts, edges, [])
+            bounds_mesh.update()
 
         root_empty = bpy.data.objects.get("OVR Root")
         if not root_empty:
