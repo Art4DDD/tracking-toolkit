@@ -56,7 +56,10 @@ class RecorderPanel(View3DPanel, bpy.types.Panel):
 
         layout.operator(CreateRefsOperator.bl_idname, text="Create References")
 
-        if not ovr_context.enabled:
+        root_obj = bpy.data.objects.get("OVR Root")
+        has_references = bool(root_obj)
+
+        if not ovr_context.enabled or not has_references:
             return
 
         layout.label(text="Recording")
@@ -77,8 +80,6 @@ class RecorderPanel(View3DPanel, bpy.types.Panel):
         )
 
         layout.label(text="Skeletal Fingers")
-
-        root_obj = bpy.data.objects.get("OVR Root")
 
         def draw_hand_props(block_layout, title: str, prefix: str):
             box = block_layout.box()

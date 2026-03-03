@@ -69,7 +69,6 @@ class CreateRefsOperator(bpy.types.Operator):
     bl_options = {"UNDO"}
 
     def execute(self, context):
-        print("1")
         ovr_context: OVRContext = context.scene.OVRContext
         if not ovr_context.enabled:
             self.report({"ERROR"}, "OpenVR has not been connected yet")
@@ -83,9 +82,22 @@ class CreateRefsOperator(bpy.types.Operator):
         else:
             prev_mode = "OBJECT"
 
+        def _delete_with_descendants(obj: bpy.types.Object):
+            to_remove = []
+
+            def collect(target):
+                to_remove.append(target)
+                for child in target.children:
+                    collect(child)
+
+            collect(obj)
+            for item in reversed(to_remove):
+                if item.name in bpy.data.objects:
+                    bpy.data.objects.remove(item)
+
         root_empty = bpy.data.objects.get("OVR Root")
         if root_empty:
-            bpy.data.objects.remove(root_empty)
+            _delete_with_descendants(root_empty)
 
         bpy.ops.object.empty_add(type="CUBE", location=(0, 0, 0))
         root_empty = bpy.context.object
@@ -231,19 +243,6 @@ class CreateRefsOperator(bpy.types.Operator):
             bpy.context.view_layer.objects.active = target_model
 
 
-        def _delete_with_descendants(obj: bpy.types.Object):
-            to_remove = []
-
-            def collect(target):
-                to_remove.append(target)
-                for child in target.children:
-                    collect(child)
-
-            collect(obj)
-            for item in reversed(to_remove):
-                if item.name in bpy.data.objects:
-                    bpy.data.objects.remove(item)
-
         for tracker in ovr_context.trackers:
             tracker_name = tracker.name
             print(">", tracker_name)
@@ -284,7 +283,7 @@ class CreateRefsOperator(bpy.types.Operator):
         for template_roots in model_templates.values():
             for template_obj in template_roots:
                 if template_obj and template_obj.name in bpy.data.objects:
-                    bpy.data.objects.remove(template_obj)
+                    _delete_with_descendants(template_obj)
 
         try:
             if prev_obj:
