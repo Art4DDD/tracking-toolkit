@@ -9,7 +9,7 @@ import bpy_extras
 import openvr
 from mathutils import Matrix, Quaternion
 
-from .properties import OVRContext, OVRTracker, OVRInput
+from .properties import OVRContext, OVRTracker
 
 # Shared variables
 
@@ -421,7 +421,11 @@ def _apply_poses():
         if not tracker_obj:
             continue
 
-        tracker_obj.matrix_world = root_world @ pose
+        target_matrix = root_world @ pose
+        if (tracker_obj.matrix_world - target_matrix).magnitude <= 1e-9:
+            continue
+
+        tracker_obj.matrix_world = target_matrix
 
 
 def _pose_vis_timer():
@@ -446,7 +450,7 @@ def _insert_action(ovr_context: OVRContext):
     print(f"OpenVR Processing {num_pose_samples} pose samples and {num_input_samples} finger samples")
 
     if num_pose_samples == 0 and num_input_samples == 0:
-        print(f"OpenVR Found no samples to process")
+        print("OpenVR Found no samples to process")
         return
 
     if num_pose_samples > 0:

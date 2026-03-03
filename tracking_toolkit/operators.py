@@ -165,7 +165,9 @@ class CreateRefsOperator(bpy.types.Operator):
             tracker_obj.show_name = True
             tracker_obj.hide_render = True
             tracker_obj.hide_select = False
-            tracker_obj.display_type = "WIRE"
+            tracker_obj.display_type = "TEXTURED"
+            tracker_obj.show_wire = True
+            tracker_obj.show_all_edges = True
             tracker_obj.show_in_front = True
             tracker_obj.rotation_mode = "QUATERNION"
             tracker_obj["_ovr_tracker_box"] = True
@@ -196,7 +198,7 @@ class CreateRefsOperator(bpy.types.Operator):
 
             tracker_mesh = tracker_obj.data
             tracker_mesh.clear_geometry()
-            tracker_mesh.from_pydata(verts, edges, [])
+            tracker_mesh.from_pydata(verts, edges, [(0, 1, 2, 3), (4, 5, 6, 7), (0, 1, 5, 4), (1, 2, 6, 5), (2, 3, 7, 6), (3, 0, 4, 7)])
             tracker_mesh.update()
 
         root_empty = bpy.data.objects.get("OVR Root")
