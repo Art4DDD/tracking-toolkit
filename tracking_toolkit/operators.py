@@ -76,6 +76,12 @@ class CreateRefsOperator(bpy.types.Operator):
             self.report({"ERROR"}, "OpenVR has not been connected yet")
             return {"FINISHED"}
 
+        if ovr_context.recording:
+            self.report({"ERROR"}, "Stop recording before creating references")
+            return {"FINISHED"}
+
+        stop_preview()
+
         prev_obj = bpy.context.object
         if prev_obj:
             prev_mode = prev_obj.mode
@@ -83,6 +89,36 @@ class CreateRefsOperator(bpy.types.Operator):
                 bpy.ops.object.mode_set(mode="OBJECT")
         else:
             prev_mode = "OBJECT"
+
+        def _iter_hierarchy(roots: list[bpy.types.Object]):
+            seen = set()
+            stack = list(roots)
+            while stack:
+                item = stack.pop()
+                if item in seen:
+                    continue
+                seen.add(item)
+                yield item
+                stack.extend(item.children)
+
+        def _set_disable_selection(roots: list[bpy.types.Object]):
+            for item in _iter_hierarchy(roots):
+                item.hide_select = True
+
+        def _delete_with_descendants(roots: list[bpy.types.Object]):
+            items = list(_iter_hierarchy(roots))
+            for item in reversed(items):
+                if item and item.name in bpy.data.objects:
+                    bpy.data.objects.remove(item)
+
+        def _estimate_display_size(roots: list[bpy.types.Object]) -> float:
+            max_dim = 0.0
+            for item in _iter_hierarchy(roots):
+                if item.type == "MESH":
+                    max_dim = max(max_dim, item.dimensions.x, item.dimensions.y, item.dimensions.z)
+            if max_dim <= 1e-6:
+                return 0.05
+            return max(0.02, max_dim * 0.5)
 
         root_empty = bpy.data.objects.get("OVR Root")
         if not root_empty:
@@ -219,6 +255,7 @@ class CreateRefsOperator(bpy.types.Operator):
                 imported.rotation_euler = (0, 0, 0)
                 imported.scale = (1, 1, 1)
 
+            _set_disable_selection(root_objects)
             model_templates[key] = root_objects
             return root_objects
 
@@ -243,6 +280,7 @@ class CreateRefsOperator(bpy.types.Operator):
             tracker_target = bpy.data.objects.get(tracker_name)
             if tracker_target:
                 tracker_target.parent = root_empty
+                _set_disable_selection(list(tracker_target.children))
                 tracker.target.object = tracker_target
                 continue
 
@@ -267,12 +305,12 @@ class CreateRefsOperator(bpy.types.Operator):
                 if i == 0:
                     dup_root.name = f"{tracker_name} Visual"
 
+            _set_disable_selection(duplicated_roots)
+            tracker_target.empty_display_size = _estimate_display_size(duplicated_roots)
             tracker.target.object = tracker_target
 
         for template_roots in model_templates.values():
-            for template_obj in template_roots:
-                if template_obj and template_obj.name in bpy.data.objects:
-                    bpy.data.objects.remove(template_obj)
+            _delete_with_descendants(template_roots)
 
         try:
             if prev_obj:
@@ -284,5 +322,6 @@ class CreateRefsOperator(bpy.types.Operator):
             pass
 
         ovr_context.references_created = True
+        start_preview(ovr_context)
         print("Done")
         return {"FINISHED"}
