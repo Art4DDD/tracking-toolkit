@@ -1,6 +1,6 @@
 import bpy
 import openvr
-from mathutils import Vector
+from mathutils import Matrix, Vector
 from pathlib import Path
 
 from .properties import Preferences, OVRContext, OVRTracker
