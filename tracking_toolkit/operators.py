@@ -588,20 +588,20 @@ class CreateRefsOperator(bpy.types.Operator):
                     )
                     component_paths.append(component_path)
 
+            # Prefer the main render-model path. Use component models only as fallback
+            # when OpenVR does not provide a primary original path.
             chosen_path = original_path
-            if component_paths:
+            source = "render_models_api"
+
+            if not chosen_path and component_paths:
                 chosen_path = component_paths[0]
-                for candidate in component_paths:
-                    lower_candidate = candidate.lower()
-                    if "pico" in lower_candidate and "knuckles" in chosen_path.lower():
-                        chosen_path = candidate
-                        break
+                source = "render_models_component_fallback"
 
             if not chosen_path:
                 return None
 
             path_obj = Path(chosen_path)
-            print(f"[OpenVR ModelPath] device={tracker.index} serial={tracker.serial} path={path_obj} source=render_models_api")
+            print(f"[OpenVR ModelPath] device={tracker.index} serial={tracker.serial} path={path_obj} source={source}")
             return path_obj
 
 
