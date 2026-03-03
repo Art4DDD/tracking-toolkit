@@ -363,9 +363,24 @@ class CreateRefsOperator(bpy.types.Operator):
         load_trackers(ovr_context)
 
         pose_by_index: dict[int, Matrix] = {}
-        try:
-            poses, _ = openvr.VRCompositor().waitGetPoses([], None)
-            axis_fix = bpy_extras.io_utils.axis_conversion("Z", "Y", "Y", "Z").to_4x4()
+        axis_fix = bpy_extras.io_utils.axis_conversion("Z", "Y", "Y", "Z").to_4x4()
+
+        poses = None
+        get_pose_fn = getattr(system, "getDeviceToAbsoluteTrackingPose", None) or getattr(system, "GetDeviceToAbsoluteTrackingPose", None)
+        if get_pose_fn:
+            try:
+                tracking_universe = getattr(openvr, "TrackingUniverseStanding", 0)
+                poses = get_pose_fn(tracking_universe, 0.0, openvr.k_unMaxTrackedDeviceCount)
+            except Exception:
+                poses = None
+
+        if poses is None:
+            try:
+                poses, _ = openvr.VRCompositor().waitGetPoses([], None)
+            except Exception:
+                poses = None
+
+        if poses is not None:
             for tracker in ovr_context.trackers:
                 if tracker.index >= len(poses):
                     continue
@@ -375,8 +390,6 @@ class CreateRefsOperator(bpy.types.Operator):
                 m = abs_pose.mDeviceToAbsoluteTracking
                 pose_mat = Matrix([list(m[0]), list(m[1]), list(m[2]), [0, 0, 0, 1]])
                 pose_by_index[tracker.index] = axis_fix @ pose_mat
-        except Exception:
-            pose_by_index = {}
 
         for tracker in ovr_context.trackers:
             tracker_name = tracker.name
