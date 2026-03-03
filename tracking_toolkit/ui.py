@@ -151,6 +151,9 @@ class RecorderPanel(View3DPanel, bpy.types.Panel):
             right_obj = None
             controller_type = str(openvr.TrackedDeviceClass_Controller)
 
+            def is_virtual_lhr_name(name: str) -> bool:
+                return (name or "").upper().startswith("LHR-FFFFFF")
+
             def find_existing(hand: str) -> bpy.types.Object | None:
                 hand = hand.lower()
                 candidates = {
@@ -172,28 +175,36 @@ class RecorderPanel(View3DPanel, bpy.types.Panel):
                 left_role = getattr(openvr, "TrackedControllerRole_LeftHand", 1)
                 right_role = getattr(openvr, "TrackedControllerRole_RightHand", 2)
 
+                role_candidates = {"left": [], "right": []}
+
                 for tracker in ovr_context.trackers:
                     tracker_obj = tracker.target.object or bpy.data.objects.get(tracker.name)
                     if tracker.type != controller_type or not tracker_obj:
-                        continue
-                    if tracker.name.upper().startswith("LHR-FFFFFF"):
                         continue
                     try:
                         role = system.getInt32TrackedDeviceProperty(tracker.index, role_prop)
                     except Exception:
                         role = None
 
-                    if role == left_role and not left_obj:
-                        left_obj = tracker_obj
-                    elif role == right_role and not right_obj:
-                        right_obj = tracker_obj
+                    if role == left_role:
+                        role_candidates["left"].append((tracker.name, tracker_obj))
+                    elif role == right_role:
+                        role_candidates["right"].append((tracker.name, tracker_obj))
+
+                if not left_obj and role_candidates["left"]:
+                    non_virtual = [obj for name, obj in role_candidates["left"] if not is_virtual_lhr_name(name)]
+                    left_obj = non_virtual[0] if non_virtual else role_candidates["left"][0][1]
+
+                if not right_obj and role_candidates["right"]:
+                    non_virtual = [obj for name, obj in role_candidates["right"] if not is_virtual_lhr_name(name)]
+                    right_obj = non_virtual[0] if non_virtual else role_candidates["right"][0][1]
             except Exception:
                 pass
 
             if not left_obj:
-                left_obj = next(((t.target.object or bpy.data.objects.get(t.name)) for t in ovr_context.trackers if t.type == controller_type and "left" in t.name.lower() and not t.name.upper().startswith("LHR-FFFFFF")), None)
+                left_obj = next(((t.target.object or bpy.data.objects.get(t.name)) for t in ovr_context.trackers if t.type == controller_type and "left" in t.name.lower()), None)
             if not right_obj:
-                right_obj = next(((t.target.object or bpy.data.objects.get(t.name)) for t in ovr_context.trackers if t.type == controller_type and "right" in t.name.lower() and not t.name.upper().startswith("LHR-FFFFFF")), None)
+                right_obj = next(((t.target.object or bpy.data.objects.get(t.name)) for t in ovr_context.trackers if t.type == controller_type and "right" in t.name.lower()), None)
 
             return left_obj, right_obj
 
