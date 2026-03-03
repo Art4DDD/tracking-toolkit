@@ -195,26 +195,33 @@ class CreateRefsOperator(bpy.types.Operator):
 
             return None
 
-        def _get_or_import_model(path: Path) -> bpy.types.Object | None:
+        def _get_or_import_model(path: Path) -> list[bpy.types.Object] | None:
             key = str(path.resolve())
             if key in model_templates:
                 return model_templates[key]
 
+            before = set(bpy.data.objects)
             try:
                 bpy.ops.wm.obj_import(filepath=str(path))
             except RuntimeError:
                 return None
 
-            imported = bpy.context.object
-            if not imported:
+            imported_objects = [obj for obj in bpy.data.objects if obj not in before]
+            if not imported_objects:
                 return None
 
-            imported.location = (0, 0, 0)
-            imported.rotation_euler = (0, 0, 0)
-            imported.scale = (1, 1, 1)
+            imported_set = set(imported_objects)
+            root_objects = [obj for obj in imported_objects if obj.parent not in imported_set]
+            if not root_objects:
+                root_objects = imported_objects
 
-            model_templates[key] = imported
-            return imported
+            for imported in root_objects:
+                imported.location = (0, 0, 0)
+                imported.rotation_euler = (0, 0, 0)
+                imported.scale = (1, 1, 1)
+
+            model_templates[key] = root_objects
+            return root_objects
 
         load_trackers(ovr_context)
 
@@ -223,50 +230,61 @@ class CreateRefsOperator(bpy.types.Operator):
             target_model.select_set(True)
             bpy.context.view_layer.objects.active = target_model
 
+
+        def _delete_with_descendants(obj: bpy.types.Object):
+            to_remove = []
+
+            def collect(target):
+                to_remove.append(target)
+                for child in target.children:
+                    collect(child)
+
+            collect(obj)
+            for item in reversed(to_remove):
+                if item.name in bpy.data.objects:
+                    bpy.data.objects.remove(item)
+
         for tracker in ovr_context.trackers:
             tracker_name = tracker.name
             print(">", tracker_name)
 
             model_path = _resolve_model_obj_path(tracker)
-            model = _get_or_import_model(model_path) if model_path else None
-            if not model:
+            model_roots = _get_or_import_model(model_path) if model_path else None
+            if not model_roots:
                 print(f"Could not resolve model for {tracker_name}; skipping")
                 continue
 
             tracker_target = bpy.data.objects.get(tracker_name)
             if tracker_target:
-                for child in list(tracker_target.children):
-                    bpy.data.objects.remove(child)
-                bpy.data.objects.remove(tracker_target)
-
-            visual_name = f"{tracker_name} Visual"
-            old_visual = bpy.data.objects.get(visual_name)
-            if old_visual:
-                bpy.data.objects.remove(old_visual)
+                _delete_with_descendants(tracker_target)
 
             bpy.ops.object.empty_add(type="CUBE", location=(0, 0, 0))
             tracker_target = bpy.context.object
             tracker_target.name = tracker_name
+            tracker_target.empty_display_size = 0.05
             tracker_target.show_name = True
             tracker_target.hide_render = True
             tracker_target.rotation_mode = "QUATERNION"
             tracker_target.parent = root_empty
 
-            select_model(model)
-            bpy.ops.object.duplicate()
+            duplicated_roots = []
+            for model_root in model_roots:
+                select_model(model_root)
+                bpy.ops.object.duplicate()
+                dup_root = bpy.context.object
+                duplicated_roots.append(dup_root)
 
-            tracker_visual = bpy.context.object
-            tracker_visual.name = visual_name
-            tracker_visual.parent = tracker_target
-            tracker_visual.location = (0, 0, 0)
-            tracker_visual.rotation_euler = (0, 0, 0)
-            tracker_visual.scale = (1, 1, 1)
+            for i, dup_root in enumerate(duplicated_roots):
+                dup_root.parent = tracker_target
+                if i == 0:
+                    dup_root.name = f"{tracker_name} Visual"
 
             tracker.target.object = tracker_target
 
-        for template_obj in model_templates.values():
-            if template_obj and template_obj.name in bpy.data.objects:
-                bpy.data.objects.remove(template_obj)
+        for template_roots in model_templates.values():
+            for template_obj in template_roots:
+                if template_obj and template_obj.name in bpy.data.objects:
+                    bpy.data.objects.remove(template_obj)
 
         try:
             if prev_obj:
