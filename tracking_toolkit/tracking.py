@@ -413,13 +413,6 @@ def _resolve_controller_targets(ovr_context: OVRContext) -> dict[str, bpy.types.
     }
     targets = {k: v for k, v in targets.items() if v is not None}
 
-    # Also allow explicit armature joint targets if user bound hands there.
-    joints = ovr_context.armature_joints
-    if "left" not in targets and joints and joints.l_hand:
-        targets["left"] = joints.l_hand
-    if "right" not in targets and joints and joints.r_hand:
-        targets["right"] = joints.r_hand
-
     role_candidates = {"left": [], "right": []}
     unresolved = []
 
