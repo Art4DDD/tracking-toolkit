@@ -332,15 +332,10 @@ def _get_poses(ovr_context: OVRContext) -> Generator[tuple[datetime.datetime, OV
         absolute_pose = poses[tracker.index].mDeviceToAbsoluteTracking
 
         mat = Matrix([list(absolute_pose[0]), list(absolute_pose[1]), list(absolute_pose[2]), [0, 0, 0, 1]])
-        mat_world = bpy_extras.io_utils.axis_conversion("Z", "Y", "Y", "Z").to_4x4()
-        mat_world = mat_world @ mat
+        mat_local = bpy_extras.io_utils.axis_conversion("Z", "Y", "Y", "Z").to_4x4()
+        mat_local = mat_local @ mat
 
-        # Apply scale (use axis scale value directly; length of (1,1,1) is 1.732 and inflates transforms)
-        root = bpy.data.objects.get("OVR Root")
-        if root:
-            mat_world = mat_world @ Matrix.Scale(root.scale.x, 4)
-
-        yield time, tracker, mat_world
+        yield time, tracker, mat_local
 
 
 def _openvr_poll_thread_func(ovr_context: OVRContext):
@@ -411,12 +406,15 @@ def _apply_poses():
     if not pose_data:
         return
 
+    root_obj = bpy.data.objects.get("OVR Root")
+    root_world = root_obj.matrix_world.copy() if root_obj else Matrix.Identity(4)
+
     for time, tracker, pose in pose_data:
         tracker_obj = bpy.data.objects.get(tracker.name)
         if not tracker_obj:
             continue
 
-        tracker_obj.matrix_world = pose
+        tracker_obj.matrix_world = root_world @ pose
 
 
 def _pose_vis_timer():
