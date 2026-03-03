@@ -401,9 +401,9 @@ class CreateRefsOperator(bpy.types.Operator):
                 print(f"Could not resolve model for {tracker_name}; skipping")
                 continue
 
-            tracker_target, tracker_created = _ensure_tracker_box(tracker_name)
+            tracker_target, _tracker_created = _ensure_tracker_box(tracker_name)
             tracker_target.parent = root_empty
-            if tracker_created and tracker.index in pose_by_index:
+            if tracker.index in pose_by_index:
                 tracker_target.matrix_world = root_empty.matrix_world @ pose_by_index[tracker.index]
 
             existing_visual_children = [child for child in tracker_target.children]
