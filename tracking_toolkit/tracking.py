@@ -218,109 +218,6 @@ def _infer_device_driver_id(fields: dict[str, str]) -> str:
 
     return ""
 
-def _collect_driver_registry_info() -> dict[str, str]:
-    info: dict[str, str] = {}
-
-    driver_manager_factory = getattr(openvr, "VRDriverManager", None)
-    if not driver_manager_factory:
-        return info
-
-    try:
-        driver_manager = driver_manager_factory()
-    except Exception:
-        return info
-
-    get_count = (
-        getattr(driver_manager, "getDriverCount", None)
-        or getattr(driver_manager, "GetDriverCount", None)
-    )
-    get_name = (
-        getattr(driver_manager, "getDriverName", None)
-        or getattr(driver_manager, "GetDriverName", None)
-    )
-    if not get_count or not get_name:
-        return info
-
-    try:
-        count = int(get_count())
-    except Exception:
-        return info
-
-    names: list[str] = []
-    for idx in range(max(count, 0)):
-        try:
-            value = get_name(idx)
-        except Exception:
-            continue
-
-        if isinstance(value, tuple):
-            name = next((item for item in value if isinstance(item, str)), "")
-        else:
-            name = value if isinstance(value, str) else ""
-
-        name = (name or "").strip()
-        if name:
-            names.append(name)
-
-    if names:
-        uniq = sorted(set(names))
-        info["driver_registry_count"] = str(len(uniq))
-        info["driver_registry_names"] = ",".join(uniq)
-
-    return info
-
-
-def _collect_render_model_registry_info() -> dict[str, str]:
-    info: dict[str, str] = {}
-
-    render_models_factory = getattr(openvr, "VRRenderModels", None)
-    if not render_models_factory:
-        return info
-
-    try:
-        render_models = render_models_factory()
-    except Exception:
-        return info
-
-    get_count = (
-        getattr(render_models, "getRenderModelCount", None)
-        or getattr(render_models, "GetRenderModelCount", None)
-    )
-    get_name = (
-        getattr(render_models, "getRenderModelName", None)
-        or getattr(render_models, "GetRenderModelName", None)
-    )
-
-    if not get_count or not get_name:
-        return info
-
-    try:
-        count = int(get_count())
-    except Exception:
-        return info
-
-    info["render_model_registry_count"] = str(max(count, 0))
-
-    sample: list[str] = []
-    for idx in range(min(max(count, 0), 40)):
-        try:
-            value = get_name(idx)
-        except Exception:
-            continue
-
-        if isinstance(value, tuple):
-            name = next((item for item in value if isinstance(item, str)), "")
-        else:
-            name = value if isinstance(value, str) else ""
-        name = (name or "").strip()
-        if name:
-            sample.append(name)
-
-    if sample:
-        info["render_model_registry_sample"] = ",".join(sample)
-
-    return info
-
 def _collect_tracker_debug_info(system, device_index: int, device_class: int) -> dict[str, str]:
     fields = {
         "index": str(device_index),
@@ -330,9 +227,13 @@ def _collect_tracker_debug_info(system, device_index: int, device_class: int) ->
     }
 
     for prop_name, prop_id in _iter_openvr_property_ids_by_suffix(DEBUG_STRING_PROP_SUFFIX):
+        key_name = prop_name.replace("Prop_", "").replace(DEBUG_STRING_PROP_SUFFIX, "").lower()
+        if key_name == "allwirelessdongledescriptions":
+            continue
+
         prop_value = _normalize_tracker_name(_safe_device_property(system, device_index, prop_id))
         if prop_value:
-            fields[prop_name.replace("Prop_", "").replace(DEBUG_STRING_PROP_SUFFIX, "").lower()] = prop_value
+            fields[key_name] = prop_value
 
     for prop_name, prop_id in _iter_openvr_property_ids_by_suffix(DEBUG_INT_PROP_SUFFIX):
         try:
@@ -372,25 +273,6 @@ def _collect_tracker_debug_info(system, device_index: int, device_class: int) ->
     if inferred_driver_id:
         fields["device_driver_id"] = inferred_driver_id
 
-    driver_registry = _collect_driver_registry_info()
-    fields.update(driver_registry)
-    if inferred_driver_id and driver_registry.get("driver_registry_names"):
-        known = {name.strip() for name in driver_registry["driver_registry_names"].split(",") if name.strip()}
-        fields["device_driver_registered"] = str(inferred_driver_id in known)
-
-    fields.update(_collect_render_model_registry_info())
-
-    return _prune_debug_noise(fields)
-
-
-def _prune_debug_noise(fields: dict[str, str]) -> dict[str, str]:
-    noisy_keys = {
-        "allwirelessdongledescriptions",
-        "driver_registry_names",
-        "render_model_registry_sample",
-    }
-    for key in noisy_keys:
-        fields.pop(key, None)
     return fields
 
 
