@@ -152,13 +152,16 @@ class CreateRefsOperator(bpy.types.Operator):
                 return tracker_obj
 
             tracker_children = []
+            old_matrix_world = Matrix.Identity(4)
             if tracker_obj:
                 tracker_children = list(tracker_obj.children)
+                old_matrix_world = tracker_obj.matrix_world.copy()
                 bpy.data.objects.remove(tracker_obj)
 
             tracker_mesh = bpy.data.meshes.new(f"{tracker_name} Mesh")
             tracker_obj = bpy.data.objects.new(tracker_name, tracker_mesh)
             context.collection.objects.link(tracker_obj)
+            tracker_obj.matrix_world = old_matrix_world
             tracker_obj.show_name = True
             tracker_obj.hide_render = True
             tracker_obj.hide_select = False
