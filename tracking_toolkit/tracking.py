@@ -380,6 +380,17 @@ def _collect_tracker_debug_info(system, device_index: int, device_class: int) ->
 
     fields.update(_collect_render_model_registry_info())
 
+    return _prune_debug_noise(fields)
+
+
+def _prune_debug_noise(fields: dict[str, str]) -> dict[str, str]:
+    noisy_keys = {
+        "allwirelessdongledescriptions",
+        "driver_registry_names",
+        "render_model_registry_sample",
+    }
+    for key in noisy_keys:
+        fields.pop(key, None)
     return fields
 
 
