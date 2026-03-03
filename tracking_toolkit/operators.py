@@ -221,39 +221,28 @@ class CreateRefsOperator(bpy.types.Operator):
 
         model_templates: dict[str, bpy.types.Object] = {}
 
-        model_db = {
-            "vr_controller_knuckles_left": [
-                install_dir / "drivers" / "indexcontroller" / "resources" / "rendermodels" / "valve_controller_knu_ev2_0_left" / "valve_controller_knu_ev2_0_left.obj",
-            ],
-            "vr_controller_knuckles_right": [
-                install_dir / "drivers" / "indexcontroller" / "resources" / "rendermodels" / "valve_controller_knu_ev2_0_right" / "valve_controller_knu_ev2_0_right.obj",
-            ],
-            "pico_controller_left": [
-                install_dir / "drivers" / "vrlink" / "resources" / "rendermodels" / "pico_4_controller_left" / "pico_4_controller_left.obj",
-            ],
-            "pico_controller_right": [
-                install_dir / "drivers" / "vrlink" / "resources" / "rendermodels" / "pico_4_controller_right" / "pico_4_controller_right.obj",
-            ],
-            "tundra_tracker": [
-                install_dir / "drivers" / "tundra_labs" / "resources" / "rendermodels" / "tundra_tracker" / "tundra_tracker.obj",
-            ],
-            "lh_basestation_valve_gen2": [
-                install_dir / "resources" / "rendermodels" / "lh_basestation_valve_gen2" / "lh_basestation_valve_gen2.obj",
-            ],
-            "lh_basestation_vive": [
-                install_dir / "resources" / "rendermodels" / "lh_basestation_vive" / "lh_basestation_vive.obj",
-            ],
-            "vr_tracker_vive_3_0": [
-                install_dir / "drivers" / "htc" / "resources" / "rendermodels" / "vr_tracker_vive_3_0" / "vr_tracker_vive_3_0.obj",
-                install_dir / "resources" / "rendermodels" / "vr_tracker_vive_3_0" / "vr_tracker_vive_3_0.obj",
-            ],
-            "vr_controller_vive_1_5": [
-                install_dir / "resources" / "rendermodels" / "vr_controller_vive_1_5" / "vr_controller_vive_1_5.obj",
-            ],
-            "generic_hmd": [
-                install_dir / "resources" / "rendermodels" / "generic_hmd" / "generic_hmd.obj",
-            ],
-        }
+
+
+        def _normalize_render_model_name(name: str) -> str:
+            token = (name or "").strip().replace("\\", "/").split("/")[-1]
+            return token.lower()
+
+        def _build_render_model_index() -> dict[str, Path]:
+            render_roots = [
+                install_dir / "resources" / "rendermodels",
+                *[driver_root / "resources" / "rendermodels" for driver_root in (install_dir / "drivers").glob("*")],
+            ]
+
+            index: dict[str, Path] = {}
+            for root in render_roots:
+                if not root.exists():
+                    continue
+                for obj_path in root.glob("*/*.obj"):
+                    index.setdefault(obj_path.stem.lower(), obj_path)
+                    index.setdefault(obj_path.parent.name.lower(), obj_path)
+            return index
+
+        render_model_index = _build_render_model_index()
 
         def _get_prop(index: int, prop: int) -> str:
             try:
@@ -281,6 +270,7 @@ class CreateRefsOperator(bpy.types.Operator):
             manufacturer = _get_prop(tracker.index, openvr.Prop_ManufacturerName_String).lower()
             model_number = _get_prop(tracker.index, openvr.Prop_ModelNumber_String).lower()
             controller_type = _get_prop(tracker.index, openvr.Prop_ControllerType_String).lower()
+            render_model_name = _get_prop(tracker.index, openvr.Prop_RenderModelName_String)
 
             keys = []
             controller_side = _controller_hand_side(tracker)
@@ -299,12 +289,26 @@ class CreateRefsOperator(bpy.types.Operator):
             if tracker.type == str(openvr.TrackedDeviceClass_TrackingReference):
                 keys.extend(["lh_basestation_valve_gen2", "lh_basestation_vive"])
 
+            normalized_render_model = _normalize_render_model_name(render_model_name)
+            if normalized_render_model:
+                keys.append(normalized_render_model)
+
             class_model = fallback_models.get(tracker.type)
             if class_model:
                 keys.append(class_model)
 
             for key in dict.fromkeys(keys):
-                for model_path in model_db.get(key, []):
+                if key in render_model_index:
+                    return render_model_index[key]
+
+                direct_paths = [
+                    install_dir / "resources" / "rendermodels" / key / f"{key}.obj",
+                    *[
+                        driver_root / "resources" / "rendermodels" / key / f"{key}.obj"
+                        for driver_root in (install_dir / "drivers").glob("*")
+                    ],
+                ]
+                for model_path in direct_paths:
                     if model_path.exists():
                         return model_path
 
