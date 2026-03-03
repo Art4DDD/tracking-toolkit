@@ -416,6 +416,29 @@ class CreateRefsOperator(bpy.types.Operator):
 
         system = openvr.VRSystem()
 
+
+        def _print_controller_overview():
+            for i in range(openvr.k_unMaxTrackedDeviceCount):
+                if system.getTrackedDeviceClass(i) == openvr.TrackedDeviceClass_Controller:
+                    print("Device", i)
+                    try:
+                        controller_type = system.getStringTrackedDeviceProperty(i, openvr.Prop_ControllerType_String)
+                    except Exception:
+                        controller_type = ""
+                    print("ControllerType:", controller_type)
+
+                    try:
+                        render_model = system.getStringTrackedDeviceProperty(i, openvr.Prop_RenderModelName_String)
+                    except Exception:
+                        render_model = ""
+                    print("RenderModel:", render_model)
+
+                    try:
+                        tracking_system = system.getStringTrackedDeviceProperty(i, openvr.Prop_TrackingSystemName_String)
+                    except Exception:
+                        tracking_system = ""
+                    print("TrackingSystem:", tracking_system)
+                    print()
         fallback_models = {
             str(openvr.TrackedDeviceClass_GenericTracker): "vr_tracker_vive_3_0",
             str(openvr.TrackedDeviceClass_Controller): "vr_controller_vive_1_5",
@@ -611,6 +634,7 @@ class CreateRefsOperator(bpy.types.Operator):
             return imported
 
         load_trackers(ovr_context)
+        _print_controller_overview()
 
         # Create references
         def select_model(target_model: bpy.types.Object):
