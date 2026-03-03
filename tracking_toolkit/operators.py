@@ -146,10 +146,10 @@ class CreateRefsOperator(bpy.types.Operator):
 
             return min_corner, max_corner
 
-        def _ensure_tracker_box(tracker_name: str) -> tuple[bpy.types.Object, bool]:
+        def _ensure_tracker_box(tracker_name: str) -> bpy.types.Object:
             tracker_obj = bpy.data.objects.get(tracker_name)
             if tracker_obj and tracker_obj.type == "MESH" and tracker_obj.get("_ovr_tracker_box"):
-                return tracker_obj, False
+                return tracker_obj
 
             tracker_children = []
             old_matrix_world = Matrix.Identity(4)
@@ -173,7 +173,7 @@ class CreateRefsOperator(bpy.types.Operator):
             for child in tracker_children:
                 child.parent = tracker_obj
 
-            return tracker_obj, True
+            return tracker_obj
 
         def _fit_tracker_box(tracker_obj: bpy.types.Object, roots: list[bpy.types.Object]):
             min_corner, max_corner = _compute_local_bounds(roots, tracker_obj)
@@ -378,7 +378,7 @@ class CreateRefsOperator(bpy.types.Operator):
                 print(f"Could not resolve model for {tracker_name}; skipping")
                 continue
 
-            tracker_target, _tracker_created = _ensure_tracker_box(tracker_name)
+            tracker_target = _ensure_tracker_box(tracker_name)
             tracker_target.parent = root_empty
             if tracker.index in pose_by_index:
                 tracker_target.matrix_world = root_empty.matrix_world @ pose_by_index[tracker.index]
