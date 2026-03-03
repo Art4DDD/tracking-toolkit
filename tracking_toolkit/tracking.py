@@ -69,10 +69,12 @@ def _safe_getattr_bool(obj, name: str, default=False):
 def _resolve_origin_device_index(vr_ipt, action_data) -> int | None:
     active_origin = getattr(action_data, "activeOrigin", 0)
     if not active_origin:
+        print("[OpenVR] getOriginTrackedDeviceInfo: activeOrigin=0 (no active origin)")
         return None
 
     get_origin_info_fn = getattr(vr_ipt, "getOriginTrackedDeviceInfo", None) or getattr(vr_ipt, "GetOriginTrackedDeviceInfo", None)
     if not get_origin_info_fn:
+        print(f"[OpenVR] getOriginTrackedDeviceInfo unavailable for activeOrigin={active_origin}")
         return None
 
     info_t = getattr(openvr, "InputOriginInfo_t", None)
@@ -91,9 +93,11 @@ def _resolve_origin_device_index(vr_ipt, action_data) -> int | None:
             if isinstance(info, tuple) and info:
                 info = info[0]
             idx = getattr(info, "trackedDeviceIndex", None)
+            print(f"[OpenVR] getOriginTrackedDeviceInfo(activeOrigin={active_origin}) -> trackedDeviceIndex={idx}")
             if idx is not None and idx >= 0:
                 return int(idx)
-        except Exception:
+        except Exception as e:
+            print(f"[OpenVR] getOriginTrackedDeviceInfo(activeOrigin={active_origin}) call failed: {e}")
             continue
 
     return None
