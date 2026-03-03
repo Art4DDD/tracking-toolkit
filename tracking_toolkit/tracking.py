@@ -57,6 +57,59 @@ def _set_action_slot_if_supported(obj: bpy.types.Object, action: bpy.types.Actio
     except Exception:
         pass
 
+
+
+def _safe_getattr_bool(obj, name: str, default=False):
+    try:
+        return bool(getattr(obj, name))
+    except Exception:
+        return default
+
+
+def _resolve_origin_device_index(vr_ipt, action_data) -> int | None:
+    active_origin = getattr(action_data, "activeOrigin", 0)
+    if not active_origin:
+        return None
+
+    get_origin_info_fn = getattr(vr_ipt, "getOriginTrackedDeviceInfo", None) or getattr(vr_ipt, "GetOriginTrackedDeviceInfo", None)
+    if not get_origin_info_fn:
+        return None
+
+    info_t = getattr(openvr, "InputOriginInfo_t", None)
+    calls = [
+        lambda: get_origin_info_fn(active_origin),
+    ]
+    if info_t:
+        calls.extend([
+            lambda: get_origin_info_fn(active_origin, info_t()),
+            lambda: get_origin_info_fn(active_origin, info_t, ctypes.sizeof(info_t)),
+        ])
+
+    for c in calls:
+        try:
+            info = c()
+            if isinstance(info, tuple) and info:
+                info = info[0]
+            idx = getattr(info, "trackedDeviceIndex", None)
+            if idx is not None and idx >= 0:
+                return int(idx)
+        except Exception:
+            continue
+
+    return None
+
+
+def _get_or_create_root_object() -> bpy.types.Object:
+    root_obj = bpy.data.objects.get("OVR Root")
+    if root_obj:
+        return root_obj
+
+    root_obj = bpy.data.objects.new("OVR Root", None)
+    root_obj.empty_display_type = "CUBE"
+    root_obj.empty_display_size = 0.1
+    bpy.context.scene.collection.objects.link(root_obj)
+    return root_obj
+
 def init_handles():
     vr_ipt = openvr.VRInput()
 
@@ -87,9 +140,7 @@ def init_handles():
 
 
 def _handle_input(ovr_context: OVRContext):
-    root_obj = bpy.data.objects.get("OVR Root")
-    if not root_obj:
-        return
+    root_obj = _get_or_create_root_object()
 
     channel_map = {
         "left_thumb_curl": ovr_context.l_input.thumb_curl,
@@ -534,11 +585,7 @@ def _insert_action(ovr_context: OVRContext):
         _set_action_slot_if_supported(tracker_obj, action)
 
     if num_input_samples > 0:
-        root_obj = bpy.data.objects.get("OVR Root")
-        if root_obj is None:
-            print("OpenVR OVR Root not found; skipping finger curve insertion")
-            print("Done")
-            return
+        root_obj = _get_or_create_root_object()
 
         if root_obj.animation_data is None:
             root_obj.animation_data_create()
