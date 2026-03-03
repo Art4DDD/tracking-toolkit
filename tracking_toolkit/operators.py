@@ -1,5 +1,6 @@
 import bpy
 import openvr
+from mathutils import Vector
 from pathlib import Path
 
 from .properties import Preferences, OVRContext, OVRTracker
@@ -111,14 +112,51 @@ class CreateRefsOperator(bpy.types.Operator):
                 if item and item.name in bpy.data.objects:
                     bpy.data.objects.remove(item)
 
-        def _estimate_display_size(roots: list[bpy.types.Object]) -> float:
-            max_dim = 0.0
+        def _compute_local_bounds(roots: list[bpy.types.Object], parent_obj: bpy.types.Object):
+            points = []
+            parent_inv = parent_obj.matrix_world.inverted()
+
             for item in _iter_hierarchy(roots):
-                if item.type == "MESH":
-                    max_dim = max(max_dim, item.dimensions.x, item.dimensions.y, item.dimensions.z)
-            if max_dim <= 1e-6:
-                return 0.05
-            return max(0.02, max_dim * 0.5)
+                if item.type != "MESH":
+                    continue
+                for corner in item.bound_box:
+                    world_corner = item.matrix_world @ Vector(corner)
+                    local_corner = parent_inv @ world_corner
+                    points.append(local_corner)
+
+            if not points:
+                return Vector((0.0, 0.0, 0.0)), Vector((0.05, 0.05, 0.05))
+
+            min_corner = Vector((min(p.x for p in points), min(p.y for p in points), min(p.z for p in points)))
+            max_corner = Vector((max(p.x for p in points), max(p.y for p in points), max(p.z for p in points)))
+            center = (min_corner + max_corner) * 0.5
+            dimensions = max_corner - min_corner
+            dimensions.x = max(dimensions.x, 0.01)
+            dimensions.y = max(dimensions.y, 0.01)
+            dimensions.z = max(dimensions.z, 0.01)
+            return center, dimensions
+
+        def _ensure_bounds_empty(parent_obj: bpy.types.Object) -> bpy.types.Object:
+            bounds_name = f"{parent_obj.name} Bounds"
+            bounds_obj = bpy.data.objects.get(bounds_name)
+            if bounds_obj and bounds_obj.parent == parent_obj:
+                return bounds_obj
+
+            bpy.ops.object.empty_add(type="CUBE", location=(0, 0, 0))
+            bounds_obj = bpy.context.object
+            bounds_obj.name = bounds_name
+            bounds_obj.parent = parent_obj
+            bounds_obj.hide_select = True
+            bounds_obj.hide_render = True
+            bounds_obj.show_name = False
+            bounds_obj.empty_display_size = 1.0
+            return bounds_obj
+
+        def _fit_bounds_empty(parent_obj: bpy.types.Object, roots: list[bpy.types.Object]):
+            center, dimensions = _compute_local_bounds(roots, parent_obj)
+            bounds_obj = _ensure_bounds_empty(parent_obj)
+            bounds_obj.location = center
+            bounds_obj.scale = (max(dimensions.x * 0.5, 0.005), max(dimensions.y * 0.5, 0.005), max(dimensions.z * 0.5, 0.005))
 
         root_empty = bpy.data.objects.get("OVR Root")
         if not root_empty:
@@ -295,6 +333,9 @@ class CreateRefsOperator(bpy.types.Operator):
             tracker_target = bpy.data.objects.get(tracker_name)
             if tracker_target:
                 tracker_target.parent = root_empty
+                visual_children = [child for child in tracker_target.children if not child.name.endswith(" Bounds")]
+                if visual_children:
+                    _fit_bounds_empty(tracker_target, visual_children)
                 _set_disable_selection(list(tracker_target.children))
                 tracker.target.object = tracker_target
                 continue
@@ -302,7 +343,8 @@ class CreateRefsOperator(bpy.types.Operator):
             bpy.ops.object.empty_add(type="CUBE", location=(0, 0, 0))
             tracker_target = bpy.context.object
             tracker_target.name = tracker_name
-            tracker_target.empty_display_size = 0.05
+            tracker_target.empty_display_type = "PLAIN_AXES"
+            tracker_target.empty_display_size = 0.02
             tracker_target.show_name = True
             tracker_target.hide_render = True
             tracker_target.rotation_mode = "QUATERNION"
@@ -318,7 +360,7 @@ class CreateRefsOperator(bpy.types.Operator):
                     dup_root.name = f"{tracker_name} Visual"
 
             _set_disable_selection(duplicated_roots)
-            tracker_target.empty_display_size = _estimate_display_size(duplicated_roots)
+            _fit_bounds_empty(tracker_target, duplicated_roots)
             tracker.target.object = tracker_target
 
         for template_roots in model_templates.values():
