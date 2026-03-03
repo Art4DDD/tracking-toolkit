@@ -37,6 +37,7 @@ class ToggleActiveOperator(bpy.types.Operator):
         if ovr_context.enabled:
             stop_preview()
             openvr.shutdown()
+            ovr_context.references_created = False
         else:
             openvr.init(openvr.VRApplication_Scene)
 
@@ -58,6 +59,7 @@ class ToggleActiveOperator(bpy.types.Operator):
             init_handles()
             load_trackers(ovr_context)
             start_preview(ovr_context)
+            ovr_context.references_created = False
 
         ovr_context.enabled = not ovr_context.enabled
         return {"FINISHED"}
@@ -95,9 +97,9 @@ class CreateRefsOperator(bpy.types.Operator):
                 if item.name in bpy.data.objects:
                     bpy.data.objects.remove(item)
 
-        root_empty = bpy.data.objects.get("OVR Root")
-        if root_empty:
-            _delete_with_descendants(root_empty)
+        existing_roots = [obj for obj in bpy.data.objects if obj.name == "OVR Root" or obj.name.startswith("OVR Root.")]
+        for existing_root in existing_roots:
+            _delete_with_descendants(existing_root)
 
         bpy.ops.object.empty_add(type="CUBE", location=(0, 0, 0))
         root_empty = bpy.context.object
@@ -294,5 +296,6 @@ class CreateRefsOperator(bpy.types.Operator):
         except ReferenceError:
             pass
 
+        ovr_context.references_created = True
         print("Done")
         return {"FINISHED"}
