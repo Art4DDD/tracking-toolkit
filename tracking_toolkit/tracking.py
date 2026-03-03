@@ -95,22 +95,33 @@ def _resolve_origin_device_index(vr_ipt, action_data) -> int | None:
             idx = getattr(info, "trackedDeviceIndex", None)
             device_path = getattr(info, "devicePath", None)
             tracked_device_path = getattr(info, "trackedDevicePath", None)
-            render_component = getattr(info, "rchRenderModelComponentName", None)
+            raw_render_component = getattr(info, "rchRenderModelComponentName", None)
+            render_component = raw_render_component
 
-            if isinstance(render_component, (bytes, bytearray)):
-                render_component = bytes(render_component).split(b"\x00", 1)[0].decode("utf-8", errors="ignore")
-            elif isinstance(render_component, (list, tuple)):
+            if isinstance(raw_render_component, (bytes, bytearray)):
+                render_component = bytes(raw_render_component).split(b"\x00", 1)[0].decode("utf-8", errors="ignore")
+            elif isinstance(raw_render_component, (list, tuple)):
                 try:
-                    render_component = bytes(render_component).split(b"\x00", 1)[0].decode("utf-8", errors="ignore")
+                    render_component = bytes(raw_render_component).split(b"\x00", 1)[0].decode("utf-8", errors="ignore")
                 except Exception:
-                    render_component = str(render_component)
+                    render_component = str(raw_render_component)
+
+            render_model_name = None
+            if idx is not None and idx >= 0:
+                try:
+                    system = openvr.VRSystem()
+                    render_model_name = system.getStringTrackedDeviceProperty(int(idx), openvr.Prop_RenderModelName_String)
+                except Exception:
+                    render_model_name = None
 
             print(
                 f"[OpenVR] getOriginTrackedDeviceInfo(activeOrigin={active_origin}) -> "
                 f"devicePath={device_path}, "
-                f"rchRenderModelComponentName={render_component}, "
+                f"rchRenderModelComponentName={render_component!r}, "
+                f"rchRenderModelComponentName_raw={raw_render_component!r}, "
                 f"trackedDevicePath={tracked_device_path}, "
-                f"trackedDeviceIndex={idx}"
+                f"trackedDeviceIndex={idx}, "
+                f"Prop_RenderModelName_String={render_model_name!r}"
             )
 
             if idx is not None and idx >= 0:
