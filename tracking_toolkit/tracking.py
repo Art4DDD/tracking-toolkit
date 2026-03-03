@@ -25,7 +25,6 @@ recording_active = False
 
 action_sets = []
 action_handles = {}
-last_skeletal_sources = {"left": None, "right": None}
 
 FINGER_CHANNELS = ("thumb_curl", "index_curl", "middle_curl", "ring_curl", "pinky_curl")
 
@@ -58,95 +57,6 @@ def _set_action_slot_if_supported(obj: bpy.types.Object, action: bpy.types.Actio
     except Exception:
         pass
 
-def _get_tracker_live_object(tracker: OVRTracker) -> bpy.types.Object | None:
-    if tracker.target.object:
-        return tracker.target.object
-
-    existing_obj = bpy.data.objects.get(tracker.name)
-    if existing_obj:
-        tracker.target.object = existing_obj
-        return existing_obj
-
-    return None
-
-
-def _find_existing_controller_object(hand: str) -> bpy.types.Object | None:
-    hand = hand.lower()
-    candidates = {
-        "left": ["left controller", "controller left", "controller_l", "controller.l", "left_hand", "l_hand", "index left", "knuckles left"],
-        "right": ["right controller", "controller right", "controller_r", "controller.r", "right_hand", "r_hand", "index right", "knuckles right"],
-    }
-
-    names = candidates.get(hand, [])
-    for obj in bpy.data.objects:
-        name = obj.name.lower()
-        if any(token in name for token in names):
-            return obj
-
-    return None
-
-
-
-
-def _is_virtual_lhr_controller_name(name: str) -> bool:
-    return (name or "").upper().startswith("LHR-FFFFFF")
-
-
-def _is_virtual_lhr_controller(tracker: OVRTracker) -> bool:
-    return _is_virtual_lhr_controller_name(tracker.name)
-
-
-def _safe_getattr_bool(obj, name: str, default=False):
-    try:
-        return bool(getattr(obj, name))
-    except Exception:
-        return default
-
-
-def _resolve_origin_device_index(vr_ipt, action_data) -> int | None:
-    active_origin = getattr(action_data, "activeOrigin", 0)
-    if not active_origin:
-        return None
-
-    get_origin_info_fn = getattr(vr_ipt, "getOriginTrackedDeviceInfo", None) or getattr(vr_ipt, "GetOriginTrackedDeviceInfo", None)
-    if not get_origin_info_fn:
-        return None
-
-    info_t = getattr(openvr, "InputOriginInfo_t", None)
-    calls = [
-        lambda: get_origin_info_fn(active_origin),
-    ]
-    if info_t:
-        calls.extend([
-            lambda: get_origin_info_fn(active_origin, info_t()),
-            lambda: get_origin_info_fn(active_origin, info_t, ctypes.sizeof(info_t)),
-        ])
-
-    for c in calls:
-        try:
-            info = c()
-            if isinstance(info, tuple) and info:
-                info = info[0]
-            idx = getattr(info, "trackedDeviceIndex", None)
-            if idx is not None and idx >= 0:
-                return int(idx)
-        except Exception:
-            continue
-
-    return None
-
-
-def _find_tracker_object_by_index(ovr_context: OVRContext, device_index: int | None) -> bpy.types.Object | None:
-    if device_index is None:
-        return None
-
-    for tracker in ovr_context.trackers:
-        if tracker.index != device_index:
-            continue
-        return _get_tracker_live_object(tracker)
-
-    return None
-
 def init_handles():
     vr_ipt = openvr.VRInput()
 
@@ -177,27 +87,27 @@ def init_handles():
 
 
 def _handle_input(ovr_context: OVRContext):
-    global last_skeletal_sources
+    root_obj = bpy.data.objects.get("OVR Root")
+    if not root_obj:
+        return
 
-    controller_targets = _resolve_controller_targets(ovr_context)
+    channel_map = {
+        "left_thumb_curl": ovr_context.l_input.thumb_curl,
+        "left_index_curl": ovr_context.l_input.index_curl,
+        "left_middle_curl": ovr_context.l_input.middle_curl,
+        "left_ring_curl": ovr_context.l_input.ring_curl,
+        "left_pinky_curl": ovr_context.l_input.pinky_curl,
+        "right_thumb_curl": ovr_context.r_input.thumb_curl,
+        "right_index_curl": ovr_context.r_input.index_curl,
+        "right_middle_curl": ovr_context.r_input.middle_curl,
+        "right_ring_curl": ovr_context.r_input.ring_curl,
+        "right_pinky_curl": ovr_context.r_input.pinky_curl,
+    }
 
-    left_obj = _find_tracker_object_by_index(ovr_context, last_skeletal_sources.get("left")) or controller_targets.get("left")
-    if left_obj:
-        _ensure_finger_properties(left_obj)
-        left_obj["thumb_curl"] = ovr_context.l_input.thumb_curl
-        left_obj["index_curl"] = ovr_context.l_input.index_curl
-        left_obj["middle_curl"] = ovr_context.l_input.middle_curl
-        left_obj["ring_curl"] = ovr_context.l_input.ring_curl
-        left_obj["pinky_curl"] = ovr_context.l_input.pinky_curl
-
-    right_obj = _find_tracker_object_by_index(ovr_context, last_skeletal_sources.get("right")) or controller_targets.get("right")
-    if right_obj:
-        _ensure_finger_properties(right_obj)
-        right_obj["thumb_curl"] = ovr_context.r_input.thumb_curl
-        right_obj["index_curl"] = ovr_context.r_input.index_curl
-        right_obj["middle_curl"] = ovr_context.r_input.middle_curl
-        right_obj["ring_curl"] = ovr_context.r_input.ring_curl
-        right_obj["pinky_curl"] = ovr_context.r_input.pinky_curl
+    for channel, value in channel_map.items():
+        if channel not in root_obj:
+            root_obj[channel] = 0.0
+        root_obj[channel] = value
 
 
 def _get_input(ovr_context: OVRContext):
@@ -355,12 +265,9 @@ def _get_input(ovr_context: OVRContext):
         print(f"[OpenVR] {action_key}: action_data.activeOrigin={active_origin} -> getOriginTrackedDeviceInfo -> trackedDeviceIndex={origin_index}")
         return result, origin_index
 
-    global last_skeletal_sources
-
     l_skeletal_data = _get_skeletal_finger_curls("l_skeleton")
     if l_skeletal_data:
-        l_skeletal, l_origin = l_skeletal_data
-        last_skeletal_sources["left"] = l_origin
+        l_skeletal, _ = l_skeletal_data
         l_ipt.thumb_curl = l_skeletal["thumb"]
         l_ipt.index_curl = l_skeletal["index"]
         l_ipt.middle_curl = l_skeletal["middle"]
@@ -369,8 +276,7 @@ def _get_input(ovr_context: OVRContext):
 
     r_skeletal_data = _get_skeletal_finger_curls("r_skeleton")
     if r_skeletal_data:
-        r_skeletal, r_origin = r_skeletal_data
-        last_skeletal_sources["right"] = r_origin
+        r_skeletal, _ = r_skeletal_data
         r_ipt.thumb_curl = r_skeletal["thumb"]
         r_ipt.index_curl = r_skeletal["index"]
         r_ipt.middle_curl = r_skeletal["middle"]
@@ -401,67 +307,6 @@ def _snapshot_input_state(ovr_context: OVRContext):
         },
     }
 
-
-def _resolve_controller_targets(ovr_context: OVRContext) -> dict[str, bpy.types.Object]:
-    system = openvr.VRSystem()
-
-    role_prop = openvr.Prop_ControllerRoleHint_Int32
-    left_role = getattr(openvr, "TrackedControllerRole_LeftHand", 1)
-    right_role = getattr(openvr, "TrackedControllerRole_RightHand", 2)
-
-    # Prefer already existing scene controller objects (renamed/non-serial objects)
-    targets = {
-        "left": _find_existing_controller_object("left"),
-        "right": _find_existing_controller_object("right"),
-    }
-    targets = {k: v for k, v in targets.items() if v is not None}
-
-    role_candidates = {"left": [], "right": []}
-    unresolved = []
-
-    for tracker in ovr_context.trackers:
-        if tracker.type != str(openvr.TrackedDeviceClass_Controller):
-            continue
-
-        target_obj = _get_tracker_live_object(tracker)
-        if not target_obj:
-            continue
-
-        try:
-            role = system.getInt32TrackedDeviceProperty(tracker.index, role_prop)
-        except Exception:
-            role = None
-
-        if role == left_role:
-            role_candidates["left"].append((tracker, target_obj))
-            continue
-        if role == right_role:
-            role_candidates["right"].append((tracker, target_obj))
-            continue
-
-        unresolved.append((tracker, target_obj))
-
-    # Pick non-virtual tracker for a hand when available; otherwise fallback to virtual.
-    for hand in ("left", "right"):
-        if hand in targets:
-            continue
-
-        candidates = role_candidates[hand]
-        non_virtual = [obj for tr, obj in candidates if not _is_virtual_lhr_controller(tr)]
-        if non_virtual:
-            targets[hand] = non_virtual[0]
-        elif candidates:
-            targets[hand] = candidates[0][1]
-
-    if "left" not in targets or "right" not in targets:
-        for tracker, target_obj in unresolved:
-            tracker_name = tracker.name.lower()
-            if "left" not in targets and ("left" in tracker_name or "_l" in tracker_name or tracker_name.endswith(".l")):
-                targets["left"] = target_obj
-            elif "right" not in targets and ("right" in tracker_name or "_r" in tracker_name or tracker_name.endswith(".r")):
-                targets["right"] = target_obj
-
-    return targets
 
 def _get_poses(ovr_context: OVRContext) -> Generator[tuple[datetime.datetime, OVRTracker, Matrix], None, None]:
     system = openvr.VRSystem()
@@ -689,11 +534,32 @@ def _insert_action(ovr_context: OVRContext):
         _set_action_slot_if_supported(tracker_obj, action)
 
     if num_input_samples > 0:
-        controller_targets = _resolve_controller_targets(ovr_context)
+        root_obj = bpy.data.objects.get("OVR Root")
+        if root_obj is None:
+            print("OpenVR OVR Root not found; skipping finger curve insertion")
+            print("Done")
+            return
+
+        if root_obj.animation_data is None:
+            root_obj.animation_data_create()
+
+        input_action = root_obj.animation_data.action
+        if not input_action:
+            input_action = bpy.data.actions.new(name="OVR_Root_Input_Action")
+            root_obj.animation_data.action = input_action
+
         input_frames = []
-        hand_channel_values = {
-            "left": {channel: [] for channel in FINGER_CHANNELS},
-            "right": {channel: [] for channel in FINGER_CHANNELS},
+        input_channels = {
+            "left_thumb_curl": [],
+            "left_index_curl": [],
+            "left_middle_curl": [],
+            "left_ring_curl": [],
+            "left_pinky_curl": [],
+            "right_thumb_curl": [],
+            "right_index_curl": [],
+            "right_middle_curl": [],
+            "right_ring_curl": [],
+            "right_pinky_curl": [],
         }
 
         for sample_time, sample_values in input_data:
@@ -701,43 +567,41 @@ def _insert_action(ovr_context: OVRContext):
             frame = start_frame + time_delta.total_seconds() * framerate
             input_frames.append(frame)
 
-            for hand in ("left", "right"):
-                hand_values = sample_values.get(hand, {})
-                for channel in FINGER_CHANNELS:
-                    hand_channel_values[hand][channel].append(hand_values.get(channel, 0.0))
+            left_values = sample_values.get("left", {})
+            right_values = sample_values.get("right", {})
 
-        for hand, target_obj in controller_targets.items():
-            if target_obj.animation_data is None:
-                target_obj.animation_data_create()
+            input_channels["left_thumb_curl"].append(left_values.get("thumb_curl", 0.0))
+            input_channels["left_index_curl"].append(left_values.get("index_curl", 0.0))
+            input_channels["left_middle_curl"].append(left_values.get("middle_curl", 0.0))
+            input_channels["left_ring_curl"].append(left_values.get("ring_curl", 0.0))
+            input_channels["left_pinky_curl"].append(left_values.get("pinky_curl", 0.0))
+            input_channels["right_thumb_curl"].append(right_values.get("thumb_curl", 0.0))
+            input_channels["right_index_curl"].append(right_values.get("index_curl", 0.0))
+            input_channels["right_middle_curl"].append(right_values.get("middle_curl", 0.0))
+            input_channels["right_ring_curl"].append(right_values.get("ring_curl", 0.0))
+            input_channels["right_pinky_curl"].append(right_values.get("pinky_curl", 0.0))
 
-            action = target_obj.animation_data.action
-            if not action:
-                action = bpy.data.actions.new(name=f"{target_obj.name}_Input_Action")
-                target_obj.animation_data.action = action
+        for channel, values in input_channels.items():
+            if channel not in root_obj:
+                root_obj[channel] = 0.0
 
-            _ensure_finger_properties(target_obj)
-            for channel in FINGER_CHANNELS:
+            data_path = f'["{channel}"]'
+            fcurve = input_action.fcurves.find(data_path, index=0)
+            if fcurve:
+                input_action.fcurves.remove(fcurve)
+            fcurve = input_action.fcurves.new(data_path, index=0)
+            fcurve.keyframe_points.add(len(input_frames))
 
-                data_path = f'["{channel}"]'
+            key_coords = [0.0] * (len(input_frames) * 2)
+            key_coords[0::2] = input_frames
+            key_coords[1::2] = values
+            fcurve.keyframe_points.foreach_set("co", key_coords)
+            fcurve.update()
 
-                fcurve = action.fcurves.find(data_path, index=0)
-                if fcurve:
-                    action.fcurves.remove(fcurve)
-                fcurve = action.fcurves.new(data_path, index=0)
-                fcurve.keyframe_points.add(len(input_frames))
+            if values:
+                root_obj[channel] = values[-1]
 
-                values = hand_channel_values[hand][channel]
-
-                key_coords = [0.0] * (len(input_frames) * 2)
-                key_coords[0::2] = input_frames
-                key_coords[1::2] = values
-                fcurve.keyframe_points.foreach_set("co", key_coords)
-                fcurve.update()
-
-                if values:
-                    target_obj[channel] = values[-1]
-
-            _set_action_slot_if_supported(target_obj, action)
+        _set_action_slot_if_supported(root_obj, input_action)
 
     print("Done")
 
