@@ -84,27 +84,12 @@ class CreateRefsOperator(bpy.types.Operator):
         else:
             prev_mode = "OBJECT"
 
-        def _delete_with_descendants(obj: bpy.types.Object):
-            to_remove = []
-
-            def collect(target):
-                to_remove.append(target)
-                for child in target.children:
-                    collect(child)
-
-            collect(obj)
-            for item in reversed(to_remove):
-                if item.name in bpy.data.objects:
-                    bpy.data.objects.remove(item)
-
-        existing_roots = [obj for obj in bpy.data.objects if obj.name == "OVR Root" or obj.name.startswith("OVR Root.")]
-        for existing_root in existing_roots:
-            _delete_with_descendants(existing_root)
-
-        bpy.ops.object.empty_add(type="CUBE", location=(0, 0, 0))
-        root_empty = bpy.context.object
-        root_empty.name = "OVR Root"
-        root_empty.empty_display_size = 0.1
+        root_empty = bpy.data.objects.get("OVR Root")
+        if not root_empty:
+            bpy.ops.object.empty_add(type="CUBE", location=(0, 0, 0))
+            root_empty = bpy.context.object
+            root_empty.name = "OVR Root"
+            root_empty.empty_display_size = 0.1
 
         preferences: Preferences | None = context.preferences.addons[base_package].preferences
         install_dir = Path(preferences.steamvr_installation_path)
@@ -257,7 +242,9 @@ class CreateRefsOperator(bpy.types.Operator):
 
             tracker_target = bpy.data.objects.get(tracker_name)
             if tracker_target:
-                _delete_with_descendants(tracker_target)
+                tracker_target.parent = root_empty
+                tracker.target.object = tracker_target
+                continue
 
             bpy.ops.object.empty_add(type="CUBE", location=(0, 0, 0))
             tracker_target = bpy.context.object
@@ -285,7 +272,7 @@ class CreateRefsOperator(bpy.types.Operator):
         for template_roots in model_templates.values():
             for template_obj in template_roots:
                 if template_obj and template_obj.name in bpy.data.objects:
-                    _delete_with_descendants(template_obj)
+                    bpy.data.objects.remove(template_obj)
 
         try:
             if prev_obj:
