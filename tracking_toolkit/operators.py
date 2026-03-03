@@ -104,6 +104,8 @@ class CreateRefsOperator(bpy.types.Operator):
 
         def _set_disable_selection(roots: list[bpy.types.Object]):
             for item in _iter_hierarchy(roots):
+                if item.get("_ovr_bounds_mesh"):
+                    continue
                 item.hide_select = True
 
         def _delete_with_descendants(roots: list[bpy.types.Object]):
@@ -125,13 +127,18 @@ class CreateRefsOperator(bpy.types.Operator):
                     points.append(local_corner)
 
             if not points:
-                return Vector((-0.025, 0.0, -0.025)), Vector((0.025, 0.0, 0.025))
+                return Vector((-0.025, -0.025, -0.025)), Vector((0.025, 0.025, 0.025))
 
             min_corner = Vector((min(p.x for p in points), min(p.y for p in points), min(p.z for p in points)))
             max_corner = Vector((max(p.x for p in points), max(p.y for p in points), max(p.z for p in points)))
+
             if abs(max_corner.x - min_corner.x) < 0.01:
                 min_corner.x -= 0.005
                 max_corner.x += 0.005
+
+            if abs(max_corner.y - min_corner.y) < 0.01:
+                min_corner.y -= 0.005
+                max_corner.y += 0.005
 
             if abs(max_corner.z - min_corner.z) < 0.01:
                 min_corner.z -= 0.005
@@ -139,39 +146,52 @@ class CreateRefsOperator(bpy.types.Operator):
 
             return min_corner, max_corner
 
-        def _ensure_bounds_empty(parent_obj: bpy.types.Object) -> bpy.types.Object:
-            bounds_name = f"{parent_obj.name} Bounds"
-            bounds_obj = bpy.data.objects.get(bounds_name)
-            if bounds_obj and bounds_obj.parent == parent_obj and bounds_obj.type == "MESH":
+        def _find_bounds_mesh(parent_obj: bpy.types.Object) -> bpy.types.Object | None:
+            for child in parent_obj.children:
+                if child.get("_ovr_bounds_mesh"):
+                    return child
+            return None
+
+        def _ensure_bounds_mesh(parent_obj: bpy.types.Object) -> bpy.types.Object:
+            bounds_obj = _find_bounds_mesh(parent_obj)
+            if bounds_obj and bounds_obj.type == "MESH":
                 return bounds_obj
 
             if bounds_obj and bounds_obj.name in bpy.data.objects:
                 bpy.data.objects.remove(bounds_obj)
 
-            bounds_mesh = bpy.data.meshes.new(f"{bounds_name} Mesh")
-            bounds_obj = bpy.data.objects.new(bounds_name, bounds_mesh)
+            bounds_mesh = bpy.data.meshes.new(f"{parent_obj.name} Bounds Mesh")
+            bounds_obj = bpy.data.objects.new(parent_obj.name, bounds_mesh)
             context.collection.objects.link(bounds_obj)
             bounds_obj.parent = parent_obj
             bounds_obj.location = (0.0, 0.0, 0.0)
-            bounds_obj.hide_select = True
             bounds_obj.hide_render = True
             bounds_obj.show_name = False
+            bounds_obj.hide_select = False
             bounds_obj.display_type = "WIRE"
             bounds_obj.show_in_front = True
+            bounds_obj["_ovr_bounds_mesh"] = True
             return bounds_obj
 
-        def _fit_bounds_empty(parent_obj: bpy.types.Object, roots: list[bpy.types.Object]):
+        def _fit_bounds_mesh(parent_obj: bpy.types.Object, roots: list[bpy.types.Object]):
             min_corner, max_corner = _compute_local_bounds(roots, parent_obj)
-            bounds_obj = _ensure_bounds_empty(parent_obj)
+            bounds_obj = _ensure_bounds_mesh(parent_obj)
 
-            y = (min_corner.y + max_corner.y) * 0.5
             verts = [
-                (min_corner.x, y, min_corner.z),
-                (max_corner.x, y, min_corner.z),
-                (max_corner.x, y, max_corner.z),
-                (min_corner.x, y, max_corner.z),
+                (min_corner.x, min_corner.y, min_corner.z),
+                (max_corner.x, min_corner.y, min_corner.z),
+                (max_corner.x, max_corner.y, min_corner.z),
+                (min_corner.x, max_corner.y, min_corner.z),
+                (min_corner.x, min_corner.y, max_corner.z),
+                (max_corner.x, min_corner.y, max_corner.z),
+                (max_corner.x, max_corner.y, max_corner.z),
+                (min_corner.x, max_corner.y, max_corner.z),
             ]
-            edges = [(0, 1), (1, 2), (2, 3), (3, 0)]
+            edges = [
+                (0, 1), (1, 2), (2, 3), (3, 0),
+                (4, 5), (5, 6), (6, 7), (7, 4),
+                (0, 4), (1, 5), (2, 6), (3, 7),
+            ]
 
             bounds_mesh = bounds_obj.data
             bounds_mesh.clear_geometry()
@@ -353,9 +373,9 @@ class CreateRefsOperator(bpy.types.Operator):
             tracker_target = bpy.data.objects.get(tracker_name)
             if tracker_target:
                 tracker_target.parent = root_empty
-                visual_children = [child for child in tracker_target.children if not child.name.endswith(" Bounds")]
+                visual_children = [child for child in tracker_target.children if not child.get("_ovr_bounds_mesh")]
                 if visual_children:
-                    _fit_bounds_empty(tracker_target, visual_children)
+                    _fit_bounds_mesh(tracker_target, visual_children)
                 _set_disable_selection(list(tracker_target.children))
                 tracker.target.object = tracker_target
                 continue
@@ -380,7 +400,7 @@ class CreateRefsOperator(bpy.types.Operator):
                     dup_root.name = f"{tracker_name} Visual"
 
             _set_disable_selection(duplicated_roots)
-            _fit_bounds_empty(tracker_target, duplicated_roots)
+            _fit_bounds_mesh(tracker_target, duplicated_roots)
             tracker.target.object = tracker_target
 
         for template_roots in model_templates.values():
