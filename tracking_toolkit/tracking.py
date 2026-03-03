@@ -93,7 +93,26 @@ def _resolve_origin_device_index(vr_ipt, action_data) -> int | None:
             if isinstance(info, tuple) and info:
                 info = info[0]
             idx = getattr(info, "trackedDeviceIndex", None)
-            print(f"[OpenVR] getOriginTrackedDeviceInfo(activeOrigin={active_origin}) -> trackedDeviceIndex={idx}")
+            device_path = getattr(info, "devicePath", None)
+            tracked_device_path = getattr(info, "trackedDevicePath", None)
+            render_component = getattr(info, "rchRenderModelComponentName", None)
+
+            if isinstance(render_component, (bytes, bytearray)):
+                render_component = bytes(render_component).split(b"\x00", 1)[0].decode("utf-8", errors="ignore")
+            elif isinstance(render_component, (list, tuple)):
+                try:
+                    render_component = bytes(render_component).split(b"\x00", 1)[0].decode("utf-8", errors="ignore")
+                except Exception:
+                    render_component = str(render_component)
+
+            print(
+                f"[OpenVR] getOriginTrackedDeviceInfo(activeOrigin={active_origin}) -> "
+                f"devicePath={device_path}, "
+                f"rchRenderModelComponentName={render_component}, "
+                f"trackedDevicePath={tracked_device_path}, "
+                f"trackedDeviceIndex={idx}"
+            )
+
             if idx is not None and idx >= 0:
                 return int(idx)
         except Exception as e:
