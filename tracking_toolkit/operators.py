@@ -259,13 +259,28 @@ class CreateRefsOperator(bpy.types.Operator):
             model_templates[key] = root_objects
             return root_objects
 
+        def _duplicate_hierarchy(root_obj: bpy.types.Object, parent_obj: bpy.types.Object) -> bpy.types.Object:
+            duplicated_by_source = {}
+
+            objects_to_copy = list(_iter_hierarchy([root_obj]))
+            for src in objects_to_copy:
+                dup = src.copy()
+                if src.data:
+                    dup.data = src.data.copy()
+                dup.parent = None
+                context.scene.collection.objects.link(dup)
+                duplicated_by_source[src] = dup
+
+            for src in objects_to_copy:
+                dup = duplicated_by_source[src]
+                if src == root_obj:
+                    dup.parent = parent_obj
+                elif src.parent in duplicated_by_source:
+                    dup.parent = duplicated_by_source[src.parent]
+
+            return duplicated_by_source[root_obj]
+
         load_trackers(ovr_context)
-
-        def select_model(target_model: bpy.types.Object):
-            bpy.ops.object.select_all(action="DESELECT")
-            target_model.select_set(True)
-            bpy.context.view_layer.objects.active = target_model
-
 
         for tracker in ovr_context.trackers:
             tracker_name = tracker.name
@@ -295,13 +310,10 @@ class CreateRefsOperator(bpy.types.Operator):
 
             duplicated_roots = []
             for model_root in model_roots:
-                select_model(model_root)
-                bpy.ops.object.duplicate()
-                dup_root = bpy.context.object
+                dup_root = _duplicate_hierarchy(model_root, tracker_target)
                 duplicated_roots.append(dup_root)
 
             for i, dup_root in enumerate(duplicated_roots):
-                dup_root.parent = tracker_target
                 if i == 0:
                     dup_root.name = f"{tracker_name} Visual"
 

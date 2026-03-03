@@ -22,11 +22,15 @@ record_buffer = []
 input_record_buffer = []
 buffer_lock = threading.Lock()
 recording_active = False
-
 action_sets = []
 action_handles = {}
 
 FINGER_CHANNELS = ("thumb_curl", "index_curl", "middle_curl", "ring_curl", "pinky_curl")
+
+latest_input_state = {
+    "left": {channel: 0.0 for channel in FINGER_CHANNELS},
+    "right": {channel: 0.0 for channel in FINGER_CHANNELS},
+}
 
 FINGER_BONE_CHAINS = {
     "thumb": (2, 3, 4, 5),
@@ -106,8 +110,23 @@ def init_handles():
     print("Initialized OpenVR skeletal action handles")
 
 
-def _handle_input(ovr_context: OVRContext):
+def _handle_input(ovr_context: OVRContext, input_state: dict[str, dict[str, float]]):
     root_obj = _get_or_create_root_object()
+
+    left_state = input_state.get("left", {})
+    right_state = input_state.get("right", {})
+
+    ovr_context.l_input.thumb_curl = float(left_state.get("thumb_curl", 0.0))
+    ovr_context.l_input.index_curl = float(left_state.get("index_curl", 0.0))
+    ovr_context.l_input.middle_curl = float(left_state.get("middle_curl", 0.0))
+    ovr_context.l_input.ring_curl = float(left_state.get("ring_curl", 0.0))
+    ovr_context.l_input.pinky_curl = float(left_state.get("pinky_curl", 0.0))
+
+    ovr_context.r_input.thumb_curl = float(right_state.get("thumb_curl", 0.0))
+    ovr_context.r_input.index_curl = float(right_state.get("index_curl", 0.0))
+    ovr_context.r_input.middle_curl = float(right_state.get("middle_curl", 0.0))
+    ovr_context.r_input.ring_curl = float(right_state.get("ring_curl", 0.0))
+    ovr_context.r_input.pinky_curl = float(right_state.get("pinky_curl", 0.0))
 
     channel_map = {
         "left_thumb_curl": ovr_context.l_input.thumb_curl,
@@ -128,14 +147,11 @@ def _handle_input(ovr_context: OVRContext):
         root_obj[channel] = value
 
 
-def _get_input(ovr_context: OVRContext):
+def _get_input() -> dict[str, dict[str, float]] | None:
     if not (action_handles and action_sets):
         return
 
     vr_ipt = openvr.VRInput()
-    l_ipt: OVRInput = ovr_context.l_input
-    r_ipt: OVRInput = ovr_context.r_input
-
     updated = False
     update_variants = [
         lambda: vr_ipt.updateActionState(action_sets, ctypes.sizeof(openvr.VRActiveActionSet_t), len(action_sets)),
@@ -152,7 +168,7 @@ def _get_input(ovr_context: OVRContext):
             continue
 
     if not updated:
-        return
+        return None
 
     def _calc_finger_curl(bone_transforms, chain: tuple[int, ...]) -> float:
         if len(chain) < 2:
@@ -280,44 +296,28 @@ def _get_input(ovr_context: OVRContext):
         return result
 
     l_skeletal = _get_skeletal_finger_curls("l_skeleton")
-    if l_skeletal:
-        l_ipt.thumb_curl = l_skeletal["thumb"]
-        l_ipt.index_curl = l_skeletal["index"]
-        l_ipt.middle_curl = l_skeletal["middle"]
-        l_ipt.ring_curl = l_skeletal["ring"]
-        l_ipt.pinky_curl = l_skeletal["pinky"]
-
     r_skeletal = _get_skeletal_finger_curls("r_skeleton")
-    if r_skeletal:
-        r_ipt.thumb_curl = r_skeletal["thumb"]
-        r_ipt.index_curl = r_skeletal["index"]
-        r_ipt.middle_curl = r_skeletal["middle"]
-        r_ipt.ring_curl = r_skeletal["ring"]
-        r_ipt.pinky_curl = r_skeletal["pinky"]
 
+    with buffer_lock:
+        previous_left = latest_input_state["left"].copy()
+        previous_right = latest_input_state["right"].copy()
 
-
-
-def _snapshot_input_state(ovr_context: OVRContext):
-    l_ipt: OVRInput = ovr_context.l_input
-    r_ipt: OVRInput = ovr_context.r_input
-
-    return datetime.datetime.now(), {
-        "left": {
-            "thumb_curl": l_ipt.thumb_curl,
-            "index_curl": l_ipt.index_curl,
-            "middle_curl": l_ipt.middle_curl,
-            "ring_curl": l_ipt.ring_curl,
-            "pinky_curl": l_ipt.pinky_curl,
-        },
-        "right": {
-            "thumb_curl": r_ipt.thumb_curl,
-            "index_curl": r_ipt.index_curl,
-            "middle_curl": r_ipt.middle_curl,
-            "ring_curl": r_ipt.ring_curl,
-            "pinky_curl": r_ipt.pinky_curl,
-        },
+    left_data = {
+        "thumb_curl": float((l_skeletal or {}).get("thumb", previous_left["thumb_curl"])),
+        "index_curl": float((l_skeletal or {}).get("index", previous_left["index_curl"])),
+        "middle_curl": float((l_skeletal or {}).get("middle", previous_left["middle_curl"])),
+        "ring_curl": float((l_skeletal or {}).get("ring", previous_left["ring_curl"])),
+        "pinky_curl": float((l_skeletal or {}).get("pinky", previous_left["pinky_curl"])),
     }
+    right_data = {
+        "thumb_curl": float((r_skeletal or {}).get("thumb", previous_right["thumb_curl"])),
+        "index_curl": float((r_skeletal or {}).get("index", previous_right["index_curl"])),
+        "middle_curl": float((r_skeletal or {}).get("middle", previous_right["middle_curl"])),
+        "ring_curl": float((r_skeletal or {}).get("ring", previous_right["ring_curl"])),
+        "pinky_curl": float((r_skeletal or {}).get("pinky", previous_right["pinky_curl"])),
+    }
+
+    return {"left": left_data, "right": right_data}
 
 
 def _get_poses(ovr_context: OVRContext) -> Generator[tuple[datetime.datetime, OVRTracker, Matrix], None, None]:
@@ -339,7 +339,7 @@ def _get_poses(ovr_context: OVRContext) -> Generator[tuple[datetime.datetime, OV
 
 
 def _openvr_poll_thread_func(ovr_context: OVRContext):
-    global pose_queue, stop_thread_flag, preview_buffer, record_buffer, input_record_buffer, buffer_lock, recording_active
+    global pose_queue, stop_thread_flag, preview_buffer, record_buffer, input_record_buffer, buffer_lock, recording_active, latest_input_state
 
     while not stop_thread_flag.is_set():
         pose_chunk = []
@@ -354,13 +354,20 @@ def _openvr_poll_thread_func(ovr_context: OVRContext):
             if recording_active:
                 record_buffer.append(pose_chunk)
 
-        _get_input(ovr_context)
-        _handle_input(ovr_context)
+        input_state = _get_input()
+        if input_state:
+            with buffer_lock:
+                latest_input_state = {
+                    "left": input_state["left"].copy(),
+                    "right": input_state["right"].copy(),
+                }
 
         if recording_active:
-            input_sample = _snapshot_input_state(ovr_context)
             with buffer_lock:
-                input_record_buffer.append(input_sample)
+                input_record_buffer.append((datetime.datetime.now(), {
+                    "left": latest_input_state["left"].copy(),
+                    "right": latest_input_state["right"].copy(),
+                }))
 
 
 def _clear_buffer():
@@ -419,6 +426,14 @@ def _apply_poses():
 
 def _pose_vis_timer():
     _apply_poses()
+    ovr_context = getattr(bpy.context.scene, "OVRContext", None)
+    if ovr_context:
+        with buffer_lock:
+            input_state = {
+                "left": latest_input_state["left"].copy(),
+                "right": latest_input_state["right"].copy(),
+            }
+        _handle_input(ovr_context, input_state)
     return 1.0 / 60  # 60hz
 
 
