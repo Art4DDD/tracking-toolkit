@@ -533,69 +533,9 @@ class CreateRefsOperator(bpy.types.Operator):
             result = get_original_path(render_model_name)
             original_path = _extract_path(result)
 
-            # SteamVR may resolve final visuals through component render models.
-            get_component_count = (
-                getattr(render_models, "getComponentCount", None)
-                or getattr(render_models, "GetComponentCount", None)
-            )
-            get_component_name = (
-                getattr(render_models, "getComponentName", None)
-                or getattr(render_models, "GetComponentName", None)
-            )
-            get_component_render_model_name = (
-                getattr(render_models, "getComponentRenderModelName", None)
-                or getattr(render_models, "GetComponentRenderModelName", None)
-            )
-
-            component_paths: list[str] = []
-            if get_component_count and get_component_name and get_component_render_model_name:
-                try:
-                    component_count = int(get_component_count(render_model_name))
-                except Exception:
-                    component_count = 0
-
-                for component_index in range(max(component_count, 0)):
-                    try:
-                        component_name_result = get_component_name(render_model_name, component_index)
-                    except Exception:
-                        continue
-
-                    component_name = _extract_path(component_name_result)
-                    if not component_name:
-                        continue
-
-                    try:
-                        component_model_result = get_component_render_model_name(render_model_name, component_name)
-                    except Exception:
-                        continue
-
-                    component_model_name = _extract_path(component_model_result)
-                    if not component_model_name:
-                        continue
-
-                    try:
-                        component_path_result = get_original_path(component_model_name)
-                    except Exception:
-                        continue
-
-                    component_path = _extract_path(component_path_result)
-                    if not component_path:
-                        continue
-
-                    print(
-                        f"[OpenVR ComponentModel] device={tracker.index} component={component_name} "
-                        f"model={component_model_name} path={component_path}"
-                    )
-                    component_paths.append(component_path)
-
-            # Prefer the main render-model path. Use component models only as fallback
-            # when OpenVR does not provide a primary original path.
+            # Use only the primary render model path from OpenVR for this device.
             chosen_path = original_path
             source = "render_models_api"
-
-            if not chosen_path and component_paths:
-                chosen_path = component_paths[0]
-                source = "render_models_component_fallback"
 
             if not chosen_path:
                 return None
