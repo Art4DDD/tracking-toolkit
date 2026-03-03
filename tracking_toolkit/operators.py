@@ -1,4 +1,5 @@
 import bpy
+import bpy_extras
 import openvr
 from mathutils import Matrix, Vector
 from pathlib import Path
@@ -146,10 +147,10 @@ class CreateRefsOperator(bpy.types.Operator):
 
             return min_corner, max_corner
 
-        def _ensure_tracker_box(tracker_name: str) -> bpy.types.Object:
+        def _ensure_tracker_box(tracker_name: str) -> tuple[bpy.types.Object, bool]:
             tracker_obj = bpy.data.objects.get(tracker_name)
             if tracker_obj and tracker_obj.type == "MESH" and tracker_obj.get("_ovr_tracker_box"):
-                return tracker_obj
+                return tracker_obj, False
 
             tracker_children = []
             old_matrix_world = Matrix.Identity(4)
@@ -173,7 +174,7 @@ class CreateRefsOperator(bpy.types.Operator):
             for child in tracker_children:
                 child.parent = tracker_obj
 
-            return tracker_obj
+            return tracker_obj, True
 
         def _fit_tracker_box(tracker_obj: bpy.types.Object, roots: list[bpy.types.Object]):
             min_corner, max_corner = _compute_local_bounds(roots, tracker_obj)
@@ -361,6 +362,22 @@ class CreateRefsOperator(bpy.types.Operator):
 
         load_trackers(ovr_context)
 
+        pose_by_index: dict[int, Matrix] = {}
+        try:
+            poses, _ = openvr.VRCompositor().waitGetPoses([], None)
+            axis_fix = bpy_extras.io_utils.axis_conversion("Z", "Y", "Y", "Z").to_4x4()
+            for tracker in ovr_context.trackers:
+                if tracker.index >= len(poses):
+                    continue
+                abs_pose = poses[tracker.index]
+                if not getattr(abs_pose, "bPoseIsValid", True):
+                    continue
+                m = abs_pose.mDeviceToAbsoluteTracking
+                pose_mat = Matrix([list(m[0]), list(m[1]), list(m[2]), [0, 0, 0, 1]])
+                pose_by_index[tracker.index] = axis_fix @ pose_mat
+        except Exception:
+            pose_by_index = {}
+
         for tracker in ovr_context.trackers:
             tracker_name = tracker.name
             print(">", tracker_name)
@@ -371,8 +388,10 @@ class CreateRefsOperator(bpy.types.Operator):
                 print(f"Could not resolve model for {tracker_name}; skipping")
                 continue
 
-            tracker_target = _ensure_tracker_box(tracker_name)
+            tracker_target, tracker_created = _ensure_tracker_box(tracker_name)
             tracker_target.parent = root_empty
+            if tracker_created and tracker.index in pose_by_index:
+                tracker_target.matrix_world = root_empty.matrix_world @ pose_by_index[tracker.index]
 
             existing_visual_children = [child for child in tracker_target.children]
             if existing_visual_children:
