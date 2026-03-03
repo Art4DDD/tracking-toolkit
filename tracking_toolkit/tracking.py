@@ -421,11 +421,7 @@ def _apply_poses():
         if not tracker_obj:
             continue
 
-        target_matrix = root_world @ pose
-        if (tracker_obj.matrix_world - target_matrix).magnitude <= 1e-9:
-            continue
-
-        tracker_obj.matrix_world = target_matrix
+        tracker_obj.matrix_world = root_world @ pose
 
 
 def _pose_vis_timer():

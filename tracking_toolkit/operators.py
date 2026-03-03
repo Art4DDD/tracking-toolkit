@@ -165,7 +165,7 @@ class CreateRefsOperator(bpy.types.Operator):
             tracker_obj.show_name = True
             tracker_obj.hide_render = True
             tracker_obj.hide_select = False
-            tracker_obj.display_type = "TEXTURED"
+            tracker_obj.display_type = "WIRE"
             tracker_obj.show_wire = True
             tracker_obj.show_all_edges = True
             tracker_obj.show_in_front = True
@@ -346,8 +346,6 @@ class CreateRefsOperator(bpy.types.Operator):
             objects_to_copy = list(_iter_hierarchy([root_obj]))
             for src in objects_to_copy:
                 dup = src.copy()
-                if src.data:
-                    dup.data = src.data.copy()
                 dup.parent = None
                 context.scene.collection.objects.link(dup)
                 duplicated_by_source[src] = dup
