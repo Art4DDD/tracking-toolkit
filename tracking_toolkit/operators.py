@@ -1,11 +1,10 @@
 import bpy
-import bpy_extras
 import openvr
 from mathutils import Matrix, Vector
 from pathlib import Path
 
 from .properties import Preferences, OVRContext, OVRTracker
-from .tracking import load_trackers, start_recording, stop_recording, start_preview, stop_preview, init_handles
+from .tracking import _get_poses, load_trackers, start_recording, stop_recording, start_preview, stop_preview, init_handles
 from .. import __package__ as base_package
 
 
@@ -363,33 +362,11 @@ class CreateRefsOperator(bpy.types.Operator):
         load_trackers(ovr_context)
 
         pose_by_index: dict[int, Matrix] = {}
-        axis_fix = bpy_extras.io_utils.axis_conversion("Z", "Y", "Y", "Z").to_4x4()
-
-        poses = None
-        get_pose_fn = getattr(system, "getDeviceToAbsoluteTrackingPose", None) or getattr(system, "GetDeviceToAbsoluteTrackingPose", None)
-        if get_pose_fn:
-            try:
-                tracking_universe = getattr(openvr, "TrackingUniverseStanding", 0)
-                poses = get_pose_fn(tracking_universe, 0.0, openvr.k_unMaxTrackedDeviceCount)
-            except Exception:
-                poses = None
-
-        if poses is None:
-            try:
-                poses, _ = openvr.VRCompositor().waitGetPoses([], None)
-            except Exception:
-                poses = None
-
-        if poses is not None:
-            for tracker in ovr_context.trackers:
-                if tracker.index >= len(poses):
-                    continue
-                abs_pose = poses[tracker.index]
-                if not getattr(abs_pose, "bPoseIsValid", True):
-                    continue
-                m = abs_pose.mDeviceToAbsoluteTracking
-                pose_mat = Matrix([list(m[0]), list(m[1]), list(m[2]), [0, 0, 0, 1]])
-                pose_by_index[tracker.index] = axis_fix @ pose_mat
+        try:
+            for _, pose_tracker, pose_matrix in _get_poses(ovr_context):
+                pose_by_index[pose_tracker.index] = pose_matrix
+        except Exception:
+            pose_by_index = {}
 
         for tracker in ovr_context.trackers:
             tracker_name = tracker.name
