@@ -218,6 +218,76 @@ def _infer_device_driver_id(fields: dict[str, str]) -> str:
 
     return ""
 
+
+
+def _collect_explicit_openvr_debug_props(system, device_index: int) -> dict[str, str]:
+    out: dict[str, str] = {}
+
+    def _prop_id(*names: str):
+        for name in names:
+            value = getattr(openvr, name, None)
+            if isinstance(value, int):
+                return value
+        return None
+
+    def _read_str(label: str, *names: str):
+        prop = _prop_id(*names)
+        if prop is None:
+            return
+        value = _normalize_tracker_name(_safe_device_property(system, device_index, prop))
+        if value:
+            out[label] = value
+
+    def _read_int(label: str, *names: str):
+        prop = _prop_id(*names)
+        if prop is None:
+            return
+        try:
+            out[label] = str(int(system.getInt32TrackedDeviceProperty(device_index, prop)))
+        except Exception:
+            pass
+
+    def _read_bool(label: str, *names: str):
+        prop = _prop_id(*names)
+        if prop is None:
+            return
+        try:
+            out[label] = str(bool(system.getBoolTrackedDeviceProperty(device_index, prop)))
+        except Exception:
+            pass
+
+    def _read_float(label: str, *names: str):
+        prop = _prop_id(*names)
+        if prop is None:
+            return
+        try:
+            out[label] = f"{float(system.getFloatTrackedDeviceProperty(device_index, prop)):.6f}"
+        except Exception:
+            pass
+
+    _read_str("actual_tracking_system_name", "Prop_ActualTrackingSystemName_String")
+    _read_str("manufacturer_name", "Prop_ManufacturerName_String")
+    _read_str("model_number", "Prop_ModelNumber_String")
+    _read_str("serial_number", "Prop_SerialNumber_String")
+    _read_str("firmware_version", "Prop_FirmwareVersion_String")
+    _read_str("hardware_revision", "Prop_HardwareRevision_String")
+    _read_str("firmware_date_code", "Prop_FirmwareDateCode_String")
+    _read_str("registered_device_type", "Prop_RegisteredDeviceType_String")
+    _read_str("connected_wireless_device", "Prop_ConnectedWirelessDevice_String", "Prop_ConnectedWirelessDongle_String")
+    _read_str("input_profile_path", "Prop_InputProfilePath_String")
+
+    _read_bool("device_is_wireless", "Prop_DeviceIsWireless_Bool", "Prop_DeviceIsWireless")
+    _read_bool("device_provides_battery_status", "Prop_DeviceProvidesBatteryStatus_Bool", "Prop_DeviceProvidesBatteryStatus")
+    _read_bool("device_is_charging", "Prop_DeviceIsCharging_Bool", "Prop_DeviceIsCharging")
+    _read_float("device_battery_percentage", "Prop_DeviceBatteryPercentage_Float", "Prop_DeviceBatteryPercentage")
+    _read_int("controller_role_hint", "Prop_ControllerRoleHint_Int32", "Prop_ControllerRoleHint")
+    _read_bool("can_wireless_connect", "Prop_CanWirelessConnect_Bool", "Prop_CanWirelessConnect")
+    _read_bool("has_camera", "Prop_HasCamera_Bool", "Prop_HasCamera")
+    _read_bool("has_proximity_sensor", "Prop_HasProximitySensor_Bool", "Prop_HasProximitySensor")
+    _read_bool("has_button", "Prop_HasButton_Bool", "Prop_HasButton")
+
+    return out
+
 def _collect_tracker_debug_info(system, device_index: int, device_class: int) -> dict[str, str]:
     fields = {
         "index": str(device_index),
@@ -273,6 +343,7 @@ def _collect_tracker_debug_info(system, device_index: int, device_class: int) ->
     if inferred_driver_id:
         fields["device_driver_id"] = inferred_driver_id
 
+    fields.update(_collect_explicit_openvr_debug_props(system, device_index))
     return fields
 
 
