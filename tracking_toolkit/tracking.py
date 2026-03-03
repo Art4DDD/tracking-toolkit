@@ -693,7 +693,11 @@ def load_trackers(ovr_context: OVRContext):
     ovr_context.trackers.clear()
 
     for i in range(openvr.k_unMaxTrackedDeviceCount):
-        if system.getTrackedDeviceClass(i) == openvr.TrackedDeviceClass_Invalid:
+        if not bool(system.isTrackedDeviceConnected(i)):
+            continue
+
+        device_class = system.getTrackedDeviceClass(i)
+        if device_class == openvr.TrackedDeviceClass_Invalid:
             continue
 
         tracker_serial = system.getStringTrackedDeviceProperty(i, openvr.Prop_SerialNumber_String)
@@ -701,6 +705,6 @@ def load_trackers(ovr_context: OVRContext):
         tracker.name = tracker_serial
         tracker.prev_name = tracker_serial
         tracker.serial = tracker_serial
-        tracker.type = str(system.getTrackedDeviceClass(i))
+        tracker.type = str(device_class)
         tracker.index = i
-        tracker.connected = bool(system.isTrackedDeviceConnected(i))  # Just in case, do it for both
+        tracker.connected = True
