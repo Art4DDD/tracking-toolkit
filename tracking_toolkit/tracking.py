@@ -24,7 +24,9 @@ buffer_lock = threading.Lock()
 recording_active = False
 action_sets = []
 action_handles = {}
+input_source_handles = {"left": 0, "right": 0}
 last_controller_button_masks = {}
+last_action_button_states = {}
 button_log_poll_count = 0
 FINGER_CHANNELS = ("thumb_curl", "index_curl", "middle_curl", "ring_curl", "pinky_curl")
 latest_input_state = {
@@ -178,6 +180,20 @@ def init_handles():
                 return handle
         return None
 
+    def _get_input_source_handle(source_path: str):
+        get_source_fn = getattr(vr_ipt, "getInputSourceHandle", None) or getattr(vr_ipt, "GetInputSourceHandle", None)
+        if not get_source_fn:
+            return 0
+        variants = [source_path, source_path.lower()]
+        for variant in variants:
+            try:
+                handle = _unwrap_handle(get_source_fn(variant))
+            except Exception:
+                continue
+            if handle:
+                return int(handle)
+        return 0
+
     global action_sets
     action_set_handle = _get_action_set_handle("/actions/default")
     action_sets = (openvr.VRActiveActionSet_t * 1)()
@@ -187,9 +203,19 @@ def init_handles():
     action_handles = {
         "l_skeleton": _get_action_handle("/actions/default/in/SkeletonLeftHand"),
         "r_skeleton": _get_action_handle("/actions/default/in/SkeletonRightHand"),
+        "l_trigger_click": _get_action_handle("/actions/default/in/TriggerClickLeft"),
+        "r_trigger_click": _get_action_handle("/actions/default/in/TriggerClickRight"),
+        "interact_ui": _get_action_handle("/actions/default/in/InteractUI"),
+    }
+
+    global input_source_handles
+    input_source_handles = {
+        "left": _get_input_source_handle("/user/hand/left"),
+        "right": _get_input_source_handle("/user/hand/right"),
     }
 
     print(f"[OpenVR] Action set '/actions/default' handle: {action_sets[0].ulActionSet}")
+    print(f"[OpenVR] Input source handles: left={input_source_handles.get('left')} right={input_source_handles.get('right')}")
 
 
 def _handle_input(ovr_context: OVRContext, input_state: dict[str, dict[str, float]]):
@@ -404,6 +430,57 @@ def _log_controller_button_presses(ovr_context: OVRContext):
         )
 
 
+def _log_action_button_states(vr_ipt):
+    get_digital_fn = getattr(vr_ipt, "getDigitalActionData", None) or getattr(vr_ipt, "GetDigitalActionData", None)
+    if not get_digital_fn:
+        return
+
+    global last_action_button_states, button_log_poll_count
+
+    def _read(action_key: str, source: str):
+        handle = action_handles.get(action_key)
+        if not handle:
+            return None
+        src = int(input_source_handles.get(source, 0) or 0)
+        calls = [
+            lambda: get_digital_fn(handle),
+            lambda: get_digital_fn(handle, openvr.k_ulInvalidInputValueHandle),
+        ]
+        if src:
+            calls.append(lambda: get_digital_fn(handle, src))
+        for c in calls:
+            try:
+                data = c()
+            except Exception:
+                continue
+            if isinstance(data, tuple) and data:
+                data = data[0]
+            if not data:
+                continue
+            active = bool(getattr(data, "bActive", True))
+            state = bool(getattr(data, "bState", False))
+            changed = bool(getattr(data, "bChanged", False))
+            return active, state, changed
+        return None
+
+    probes = [
+        ("l_trigger_click", "left"),
+        ("r_trigger_click", "right"),
+        ("interact_ui", "right"),
+        ("interact_ui", "left"),
+    ]
+    for key, side in probes:
+        result = _read(key, side)
+        if result is None:
+            continue
+        active, state, changed = result
+        state_key = f"{key}:{side}"
+        prev = last_action_button_states.get(state_key)
+        if changed or prev != state or (button_log_poll_count % 120 == 0):
+            print(f"[OpenVR][Action] {state_key} active={active} state={state} changed={changed}")
+        last_action_button_states[state_key] = state
+
+
 def _get_input(ovr_context: OVRContext) -> dict[str, dict[str, float]] | None:
     vr_ipt = openvr.VRInput()
 
@@ -432,6 +509,11 @@ def _get_input(ovr_context: OVRContext) -> dict[str, dict[str, float]] | None:
 
     try:
         _log_controller_button_presses(ovr_context)
+    except Exception:
+        pass
+
+    try:
+        _log_action_button_states(vr_ipt)
     except Exception:
         pass
 
