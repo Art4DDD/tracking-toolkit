@@ -80,7 +80,6 @@ class RecorderPanel(View3DPanel, bpy.types.Panel):
         show_tools = ovr_context.enabled or bool(root_obj)
         if not show_tools:
             return
-
         if ovr_context.recordings_made:
             convert_row = layout.row()
             convert_row.scale_y = 2
