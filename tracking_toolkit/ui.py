@@ -85,9 +85,9 @@ class RecorderPanel(View3DPanel, bpy.types.Panel):
         if ovr_context.recordings_made:
             convert_row = layout.row()
             convert_row.scale_y = 2
-            convert_row.operator(ConvertSubframesOperator.bl_idname, text="Convert Subframes To Frames", icon="KEYTYPE_KEYFRAME_VEC")
+            convert_row.operator(ConvertSubframesOperator.bl_idname, text="Convert Subframes To Frames", icon="KEYTYPE_KEYFRAME_VEC")
 
-        if not root_obj:
+        if not (ovr_context.references_ever_created and root_obj):
             return
 
         layout.label(text="Skeletal Fingers")

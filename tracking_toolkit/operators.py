@@ -469,6 +469,7 @@ class CreateRefsOperator(bpy.types.Operator):
             pass
 
         ovr_context.references_created = True
+        ovr_context.references_ever_created = True
         start_preview(ovr_context)
         print("Done")
         return {"FINISHED"}
