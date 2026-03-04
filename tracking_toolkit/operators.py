@@ -3,7 +3,6 @@ import openvr
 from mathutils import Matrix, Vector
 from pathlib import Path
 
-
 from .properties import Preferences, OVRContext, OVRTracker
 from .tracking import _get_poses, load_trackers, start_recording, stop_recording, start_preview, stop_preview, init_handles
 from .. import __package__ as base_package
@@ -45,9 +44,11 @@ class ConvertSubframesOperator(bpy.types.Operator):
             for fcurve in action.fcurves:
                 for key in fcurve.keyframe_points:
                     rounded_frame = round(float(key.co.x))
+                    frame_delta = rounded_frame - float(key.co.x)
+
                     key.co.x = rounded_frame
-                    key.handle_left.x = rounded_frame
-                    key.handle_right.x = rounded_frame
+                    key.handle_left.x += frame_delta
+                    key.handle_right.x += frame_delta
                     key_count += 1
                 fcurve.update()
 

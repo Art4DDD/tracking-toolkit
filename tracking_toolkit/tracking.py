@@ -198,11 +198,14 @@ def _controller_trigger_values(ovr_context: OVRContext) -> tuple[float, float]:
             elif len(controller_state) == 1:
                 controller_state = controller_state[0]
 
-        axis_value = 0.0
-        try:
-            axis_value = float(controller_state.rAxis[1].x)
-        except Exception:
-            axis_value = 0.0
+        axis_candidates = []
+        for axis_index in (1, 2):
+            for component in ("x", "y"):
+                try:
+                    axis_candidates.append(abs(float(getattr(controller_state.rAxis[axis_index], component))))
+                except Exception:
+                    continue
+        axis_value = max(axis_candidates) if axis_candidates else 0.0
 
         button_pressed = bool(getattr(controller_state, "ulButtonPressed", 0) & trigger_mask)
         trigger_value = max(axis_value, 1.0 if button_pressed else 0.0)
@@ -216,27 +219,23 @@ def _controller_trigger_values(ovr_context: OVRContext) -> tuple[float, float]:
 
 
 def _get_input(ovr_context: OVRContext) -> dict[str, dict[str, float]] | None:
-    if not (action_handles and action_sets):
-        return
-
     vr_ipt = openvr.VRInput()
+
     updated = False
-    update_variants = [
-        lambda: vr_ipt.updateActionState(action_sets, ctypes.sizeof(openvr.VRActiveActionSet_t), len(action_sets)),
-        lambda: vr_ipt.updateActionState(action_sets),
-        lambda: vr_ipt.updateActionState(action_sets[0], ctypes.sizeof(openvr.VRActiveActionSet_t), 1),
-    ]
+    if action_handles and action_sets:
+        update_variants = [
+            lambda: vr_ipt.updateActionState(action_sets, ctypes.sizeof(openvr.VRActiveActionSet_t), len(action_sets)),
+            lambda: vr_ipt.updateActionState(action_sets),
+            lambda: vr_ipt.updateActionState(action_sets[0], ctypes.sizeof(openvr.VRActiveActionSet_t), 1),
+        ]
 
-    for update_call in update_variants:
-        try:
-            update_call()
-            updated = True
-            break
-        except Exception:
-            continue
-
-    if not updated:
-        return None
+        for update_call in update_variants:
+            try:
+                update_call()
+                updated = True
+                break
+            except Exception:
+                continue
 
     def _calc_finger_curl(bone_transforms, chain: tuple[int, ...]) -> float:
         if len(chain) < 2:
@@ -363,8 +362,8 @@ def _get_input(ovr_context: OVRContext) -> dict[str, dict[str, float]] | None:
             return None
         return result
 
-    l_skeletal = _get_skeletal_finger_curls("l_skeleton")
-    r_skeletal = _get_skeletal_finger_curls("r_skeleton")
+    l_skeletal = _get_skeletal_finger_curls("l_skeleton") if updated else None
+    r_skeletal = _get_skeletal_finger_curls("r_skeleton") if updated else None
 
     with buffer_lock:
         previous_left = latest_input_state["left"].copy()
@@ -477,8 +476,14 @@ def _get_latest_poses() -> list[tuple[datetime.datetime, OVRTracker, Matrix]] | 
 
 
 def _apply_poses():
+    # During undo/redo Blender may not provide a valid screen, skip preview safely.
+    try:
+        screen = bpy.context.screen
+    except Exception:
+        return
+
     # Don't preview when playing, since a previous recording may interfere
-    if bpy.context.screen.is_animation_playing:
+    if not screen or screen.is_animation_playing:
         return
 
     pose_data = _get_latest_poses()
@@ -489,7 +494,12 @@ def _apply_poses():
     root_world = root_obj.matrix_world.copy() if root_obj else Matrix.Identity(4)
 
     for time, tracker, pose in pose_data:
-        tracker_obj = bpy.data.objects.get(tracker.name)
+        try:
+            tracker_name = tracker.name
+        except ReferenceError:
+            continue
+
+        tracker_obj = bpy.data.objects.get(tracker_name)
         if not tracker_obj:
             continue
 
