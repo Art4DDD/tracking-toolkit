@@ -25,6 +25,7 @@ recording_active = False
 action_sets = []
 action_handles = {}
 last_controller_button_masks = {}
+button_log_poll_count = 0
 FINGER_CHANNELS = ("thumb_curl", "index_curl", "middle_curl", "ring_curl", "pinky_curl")
 latest_input_state = {
     "left": {channel: 0.0 for channel in FINGER_CHANNELS},
@@ -172,19 +173,19 @@ def _handle_input(ovr_context: OVRContext, input_state: dict[str, dict[str, floa
 def _log_controller_button_presses(ovr_context: OVRContext):
     system = openvr.VRSystem()
     get_state_fn = getattr(system, "getControllerState", None) or getattr(system, "GetControllerState", None)
+    get_idx_fn = getattr(system, "getTrackedDeviceIndexForControllerRole", None) or getattr(system, "GetTrackedDeviceIndexForControllerRole", None)
     if not get_state_fn:
+        print("[OpenVR] getControllerState is unavailable in this binding")
         return
 
-    global last_controller_button_masks
+    global last_controller_button_masks, button_log_poll_count
+    button_log_poll_count += 1
 
-    for tracker in ovr_context.trackers:
-        if tracker.type != str(openvr.TrackedDeviceClass_Controller):
-            continue
-
+    def _read_state(index: int):
         state = None
         calls = [
-            lambda: get_state_fn(tracker.index),
-            lambda: get_state_fn(tracker.index, openvr.VRControllerState_t()),
+            lambda: get_state_fn(index),
+            lambda: get_state_fn(index, openvr.VRControllerState_t()),
         ]
         for call in calls:
             try:
@@ -202,7 +203,45 @@ def _log_controller_button_presses(ovr_context: OVRContext):
 
             if state:
                 break
+        return state
 
+    seen_indexes = set()
+
+    # Preferred path: explicit left/right role indexes from OpenVR.
+    if get_idx_fn:
+        for side, role in (("left", getattr(openvr, "TrackedControllerRole_LeftHand", 1)), ("right", getattr(openvr, "TrackedControllerRole_RightHand", 2))):
+            try:
+                idx = int(get_idx_fn(role))
+            except Exception:
+                continue
+
+            invalid_idx = int(getattr(openvr, "k_unTrackedDeviceIndexInvalid", 0xFFFFFFFF))
+            if idx < 0 or idx == invalid_idx:
+                continue
+
+            seen_indexes.add(idx)
+            state = _read_state(idx)
+            if not state:
+                continue
+
+            pressed = int(getattr(state, "ulButtonPressed", 0))
+            touched = int(getattr(state, "ulButtonTouched", 0))
+            prev_pressed = int(last_controller_button_masks.get(idx, -1))
+            if pressed != prev_pressed:
+                print(
+                    f"[OpenVR] Controller role={side} idx={idx} "
+                    f"ulButtonPressed=0x{pressed:016X} ulButtonTouched=0x{touched:016X}"
+                )
+                last_controller_button_masks[idx] = pressed
+
+    # Fallback: scan controller trackers list.
+    for tracker in ovr_context.trackers:
+        if tracker.type != str(openvr.TrackedDeviceClass_Controller):
+            continue
+        if tracker.index in seen_indexes:
+            continue
+
+        state = _read_state(tracker.index)
         if not state:
             continue
 
@@ -216,6 +255,9 @@ def _log_controller_button_presses(ovr_context: OVRContext):
                 f"ulButtonPressed=0x{pressed:016X} ulButtonTouched=0x{touched:016X}"
             )
             last_controller_button_masks[tracker.index] = pressed
+
+    if button_log_poll_count % 300 == 0:
+        print(f"[OpenVR] Controller button polling heartbeat: tracked_masks={len(last_controller_button_masks)}")
 
 
 def _get_input(ovr_context: OVRContext) -> dict[str, dict[str, float]] | None:
