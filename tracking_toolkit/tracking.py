@@ -27,14 +27,10 @@ action_handles = {}
 
 FINGER_CHANNELS = ("thumb_curl", "index_curl", "middle_curl", "ring_curl", "pinky_curl")
 TRIGGER_CHANNEL = "trigger_value"
-TRIGGER_TOGGLE_THRESHOLD = 0.75
-
 latest_input_state = {
     "left": {channel: 0.0 for channel in (*FINGER_CHANNELS, TRIGGER_CHANNEL)},
     "right": {channel: 0.0 for channel in (*FINGER_CHANNELS, TRIGGER_CHANNEL)},
 }
-
-trigger_toggle_latched = False
 
 FINGER_BONE_CHAINS = {
     "thumb": (2, 3, 4, 5),
@@ -527,8 +523,6 @@ def _apply_poses():
 
 
 def _pose_vis_timer():
-    global trigger_toggle_latched
-
     _apply_poses()
     scene = getattr(bpy.context, "scene", None)
     if scene is None:
@@ -542,21 +536,6 @@ def _pose_vis_timer():
                 "right": latest_input_state["right"].copy(),
             }
         _handle_input(ovr_context, input_state)
-
-        both_triggers_pressed = (
-            input_state["left"].get(TRIGGER_CHANNEL, 0.0) >= TRIGGER_TOGGLE_THRESHOLD
-            and input_state["right"].get(TRIGGER_CHANNEL, 0.0) >= TRIGGER_TOGGLE_THRESHOLD
-        )
-
-        if both_triggers_pressed and not trigger_toggle_latched:
-            ovr_context.recording = not ovr_context.recording
-            if ovr_context.recording:
-                ovr_context.record_start_frame = scene.frame_current
-                start_recording()
-            else:
-                stop_recording(ovr_context)
-
-        trigger_toggle_latched = both_triggers_pressed
 
     return 1.0 / 60  # 60hz
 
@@ -766,6 +745,8 @@ def stop_recording(ovr_context: OVRContext | None):
     recording_active = False
     stop_preview()
     _insert_action(ovr_context)
+    if ovr_context:
+        ovr_context.recordings_made = True
     _clear_buffer()
     start_preview(ovr_context)
 

@@ -76,6 +76,7 @@ class OVRContext(bpy.types.PropertyGroup):
     enabled: bpy.props.BoolProperty(name="OpenVR active", default=False)
     recording: bpy.props.BoolProperty(name="OpenVR recording", default=False)
     references_created: bpy.props.BoolProperty(name="References created", default=False)
+    recordings_made: bpy.props.BoolProperty(name="Recordings made", default=False)
 
     trackers: bpy.props.CollectionProperty(type=OVRTracker)
     selected_tracker: bpy.props.IntProperty(name="Selected tracker", default=0, update=selected_tracker_change_callback)
