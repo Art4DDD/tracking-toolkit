@@ -3,27 +3,6 @@
   "controller_type": "knuckles",
   "bindings": {
     "/actions/default": {
-      "chords": [],
-      "haptics": [
-        {
-          "output": "/actions/default/out/Haptic",
-          "path": "/user/hand/left/output/haptic"
-        },
-        {
-          "output": "/actions/default/out/Haptic",
-          "path": "/user/hand/right/output/haptic"
-        }
-      ],
-      "poses": [
-        {
-          "output": "/actions/default/in/Pose",
-          "path": "/user/hand/left/pose/raw"
-        },
-        {
-          "output": "/actions/default/in/Pose",
-          "path": "/user/hand/right/pose/raw"
-        }
-      ],
       "skeleton": [
         {
           "output": "/actions/default/in/SkeletonLeftHand",
@@ -32,80 +11,6 @@
         {
           "output": "/actions/default/in/SkeletonRightHand",
           "path": "/user/hand/right/input/skeleton/right"
-        }
-      ],
-      "sources": [
-        {
-          "path": "/user/hand/left/input/trigger",
-          "mode": "button",
-          "inputs": {
-            "click": {
-              "output": "/actions/default/in/TriggerClickLeft"
-            }
-          }
-        },
-        {
-          "path": "/user/hand/right/input/trigger",
-          "mode": "button",
-          "inputs": {
-            "click": {
-              "output": "/actions/default/in/TriggerClickRight"
-            }
-          }
-        },
-        {
-          "path": "/user/hand/left/input/trigger",
-          "mode": "button",
-          "inputs": {
-            "click": {
-              "output": "/actions/default/in/InteractUI"
-            }
-          }
-        },
-        {
-          "path": "/user/hand/right/input/trigger",
-          "mode": "button",
-          "inputs": {
-            "click": {
-              "output": "/actions/default/in/InteractUI"
-            }
-          }
-        },
-        {
-          "path": "/user/hand/left/input/grip",
-          "mode": "force_sensor",
-          "inputs": {
-            "force": {
-              "output": "/actions/default/in/Squeeze"
-            }
-          }
-        },
-        {
-          "path": "/user/hand/right/input/grip",
-          "mode": "force_sensor",
-          "inputs": {
-            "force": {
-              "output": "/actions/default/in/Squeeze"
-            }
-          }
-        },
-        {
-          "path": "/user/hand/left/input/trackpad",
-          "mode": "button",
-          "inputs": {
-            "click": {
-              "output": "/actions/default/in/Teleport"
-            }
-          }
-        },
-        {
-          "path": "/user/hand/right/input/trackpad",
-          "mode": "button",
-          "inputs": {
-            "click": {
-              "output": "/actions/default/in/Teleport"
-            }
-          }
         }
       ]
     }

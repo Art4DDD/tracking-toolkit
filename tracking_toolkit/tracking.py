@@ -24,15 +24,10 @@ buffer_lock = threading.Lock()
 recording_active = False
 action_sets = []
 action_handles = {}
-input_source_handles = {"left": 0, "right": 0}
-trigger_click_state = {"left": False, "right": False, "interact_ui": False, "event_left": False, "event_right": False}
-trigger_debug_counter = 0
-
 FINGER_CHANNELS = ("thumb_curl", "index_curl", "middle_curl", "ring_curl", "pinky_curl")
-TRIGGER_CHANNEL = "trigger_value"
 latest_input_state = {
-    "left": {channel: 0.0 for channel in (*FINGER_CHANNELS, TRIGGER_CHANNEL)},
-    "right": {channel: 0.0 for channel in (*FINGER_CHANNELS, TRIGGER_CHANNEL)},
+    "left": {channel: 0.0 for channel in FINGER_CHANNELS},
+    "right": {channel: 0.0 for channel in FINGER_CHANNELS},
 }
 
 FINGER_BONE_CHAINS = {
@@ -120,20 +115,6 @@ def init_handles():
                 return handle
         return None
 
-    def _get_input_source_handle(source_path: str):
-        get_source_fn = getattr(vr_ipt, "getInputSourceHandle", None) or getattr(vr_ipt, "GetInputSourceHandle", None)
-        if not get_source_fn:
-            return 0
-        variants = [source_path, source_path.lower()]
-        for variant in variants:
-            try:
-                handle = _unwrap_handle(get_source_fn(variant))
-            except Exception:
-                continue
-            if handle:
-                return int(handle)
-        return 0
-
     global action_sets
     action_set_handle = _get_action_set_handle("/actions/default")
     action_sets = (openvr.VRActiveActionSet_t * 1)()
@@ -143,20 +124,9 @@ def init_handles():
     action_handles = {
         "l_skeleton": _get_action_handle("/actions/default/in/SkeletonLeftHand"),
         "r_skeleton": _get_action_handle("/actions/default/in/SkeletonRightHand"),
-        "l_trigger_click": _get_action_handle("/actions/default/in/TriggerClickLeft"),
-        "r_trigger_click": _get_action_handle("/actions/default/in/TriggerClickRight"),
-        "interact_ui": _get_action_handle("/actions/default/in/InteractUI"),
-    }
-
-    global input_source_handles
-    input_source_handles = {
-        "left": _get_input_source_handle("/user/hand/left"),
-        "right": _get_input_source_handle("/user/hand/right"),
     }
 
     print(f"[OpenVR] Action set '/actions/default' handle: {action_sets[0].ulActionSet}")
-    print(f"[OpenVR] Trigger handles: left={action_handles.get('l_trigger_click')} right={action_handles.get('r_trigger_click')} interact_ui={action_handles.get('interact_ui')}")
-    print(f"[OpenVR] Input source handles: left={input_source_handles.get('left')} right={input_source_handles.get('right')}")
 
 
 def _handle_input(ovr_context: OVRContext, input_state: dict[str, dict[str, float]]):
@@ -170,14 +140,14 @@ def _handle_input(ovr_context: OVRContext, input_state: dict[str, dict[str, floa
     ovr_context.l_input.middle_curl = float(left_state.get("middle_curl", 0.0))
     ovr_context.l_input.ring_curl = float(left_state.get("ring_curl", 0.0))
     ovr_context.l_input.pinky_curl = float(left_state.get("pinky_curl", 0.0))
-    ovr_context.l_input.trigger_strength = float(left_state.get(TRIGGER_CHANNEL, 0.0))
+    ovr_context.l_input.trigger_strength = 0.0
 
     ovr_context.r_input.thumb_curl = float(right_state.get("thumb_curl", 0.0))
     ovr_context.r_input.index_curl = float(right_state.get("index_curl", 0.0))
     ovr_context.r_input.middle_curl = float(right_state.get("middle_curl", 0.0))
     ovr_context.r_input.ring_curl = float(right_state.get("ring_curl", 0.0))
     ovr_context.r_input.pinky_curl = float(right_state.get("pinky_curl", 0.0))
-    ovr_context.r_input.trigger_strength = float(right_state.get(TRIGGER_CHANNEL, 0.0))
+    ovr_context.r_input.trigger_strength = 0.0
 
     channel_map = {
         "left_thumb_curl": ovr_context.l_input.thumb_curl,
@@ -196,229 +166,6 @@ def _handle_input(ovr_context: OVRContext, input_state: dict[str, dict[str, floa
         if channel not in root_obj:
             root_obj[channel] = 0.0
         root_obj[channel] = value
-
-
-def _controller_trigger_values(vr_ipt, ovr_context: OVRContext) -> tuple[float, float]:
-    def _unwrap_openvr_result(result):
-        if isinstance(result, tuple):
-            for item in result:
-                if hasattr(item, "bState") or hasattr(item, "bActive") or hasattr(item, "ulButtonPressed"):
-                    return item
-            if result:
-                return result[-1]
-        return result
-
-    def _read_bool_attr(data, names: tuple[str, ...], default=False) -> bool:
-        for name in names:
-            try:
-                if hasattr(data, name):
-                    return bool(getattr(data, name))
-            except Exception:
-                continue
-        return default
-
-    def _digital_state(action_key: str, source_handle: int = 0) -> tuple[bool, bool, bool]:
-        action = action_handles.get(action_key)
-        if action is None or int(action) == 0:
-            return False, False, False
-
-        get_digital_fn = getattr(vr_ipt, "getDigitalActionData", None) or getattr(vr_ipt, "GetDigitalActionData", None)
-        if not get_digital_fn:
-            return False, False, False
-
-        call_variants = [
-            lambda: get_digital_fn(action),
-            lambda: get_digital_fn(action, openvr.k_ulInvalidInputValueHandle),
-        ]
-        if source_handle:
-            call_variants.append(lambda: get_digital_fn(action, int(source_handle)))
-
-        for call in call_variants:
-            try:
-                data = _unwrap_openvr_result(call())
-            except Exception:
-                continue
-            if not data:
-                continue
-            active = _read_bool_attr(data, ("bActive", "active"), default=True)
-            state = _read_bool_attr(data, ("bState", "state"), default=False)
-            changed = _read_bool_attr(data, ("bChanged", "changed"), default=False)
-            return active, state, changed
-
-        return False, False, False
-
-    global trigger_debug_counter
-    trigger_debug_counter += 1
-
-    left_source = int(input_source_handles.get("left", 0) or 0)
-    right_source = int(input_source_handles.get("right", 0) or 0)
-
-    l_active, l_state, l_changed = _digital_state("l_trigger_click", left_source)
-    r_active, r_state, r_changed = _digital_state("r_trigger_click", right_source)
-
-    # InteractUI from either hand (often mapped only to one side in manifests)
-    i_l_active, i_l_state, i_l_changed = _digital_state("interact_ui", left_source)
-    i_r_active, i_r_state, i_r_changed = _digital_state("interact_ui", right_source)
-
-    left_pressed = bool((l_active and l_state) or (i_l_active and i_l_state))
-    right_pressed = bool((r_active and r_state) or (i_r_active and i_r_state))
-
-    if l_changed and l_state:
-        print("[OpenVR] Trigger click fired (digital l_trigger_click)")
-    if r_changed and r_state:
-        print("[OpenVR] Trigger click fired (digital r_trigger_click)")
-    if i_l_changed and i_l_state:
-        print("[OpenVR] Trigger click fired (digital interact_ui left)")
-    if i_r_changed and i_r_state:
-        print("[OpenVR] Trigger click fired (digital interact_ui right)")
-
-    if left_pressed or right_pressed or (trigger_debug_counter % 120 == 0):
-        print(
-            "[OpenVR][TriggerDebug][Digital] "
-            f"l={{a:{l_active},s:{l_state},c:{l_changed}}} "
-            f"r={{a:{r_active},s:{r_state},c:{r_changed}}} "
-            f"il={{a:{i_l_active},s:{i_l_state},c:{i_l_changed}}} "
-            f"ir={{a:{i_r_active},s:{i_r_state},c:{i_r_changed}}}"
-        )
-
-    # Legacy path analogous to finger fallback sampling: poll controller state directly each frame.
-    try:
-        system = openvr.VRSystem()
-        get_idx_fn = getattr(system, "getTrackedDeviceIndexForControllerRole", None) or getattr(system, "GetTrackedDeviceIndexForControllerRole", None)
-        get_state_fn = getattr(system, "getControllerState", None) or getattr(system, "GetControllerState", None)
-
-        left_role = getattr(openvr, "TrackedControllerRole_LeftHand", 1)
-        right_role = getattr(openvr, "TrackedControllerRole_RightHand", 2)
-        trigger_button = getattr(openvr, "k_EButton_SteamVR_Trigger", 33)
-        trigger_mask = 1 << trigger_button
-
-        def _read_role_pressed(role_const: int):
-            if not get_idx_fn or not get_state_fn:
-                return False, 0.0, -1
-            try:
-                idx = int(get_idx_fn(role_const))
-            except Exception:
-                return False, 0.0, -1
-            if idx < 0 or idx == getattr(openvr, "k_unTrackedDeviceIndexInvalid", 0xFFFFFFFF):
-                return False, 0.0, idx
-
-            state_obj = None
-            calls = [
-                lambda: get_state_fn(idx),
-                lambda: get_state_fn(idx, openvr.VRControllerState_t()),
-            ]
-            for c in calls:
-                try:
-                    state_obj = _unwrap_openvr_result(c())
-                except Exception:
-                    continue
-                if state_obj:
-                    break
-            if not state_obj:
-                return False, 0.0, idx
-
-            mask_pressed = bool(getattr(state_obj, "ulButtonPressed", 0) & trigger_mask)
-            axis_val = 0.0
-            axes = getattr(state_obj, "rAxis", None)
-            if axes:
-                for axis_idx in (1, 2, 0):
-                    try:
-                        axis = axes[axis_idx]
-                        axis_val = max(axis_val, float(getattr(axis, "x", 0.0)), float(getattr(axis, "y", 0.0)))
-                    except Exception:
-                        continue
-            axis_pressed = axis_val >= 0.75
-            return bool(mask_pressed or axis_pressed), axis_val, idx
-
-        legacy_left, legacy_left_axis, left_idx = _read_role_pressed(left_role)
-        legacy_right, legacy_right_axis, right_idx = _read_role_pressed(right_role)
-
-        if legacy_left or legacy_right or (trigger_debug_counter % 120 == 0):
-            print(
-                "[OpenVR][TriggerDebug][ControllerState] "
-                f"left(idx={left_idx},pressed={legacy_left},axis={legacy_left_axis:.3f}) "
-                f"right(idx={right_idx},pressed={legacy_right},axis={legacy_right_axis:.3f})"
-            )
-
-        left_pressed = bool(left_pressed or legacy_left)
-        right_pressed = bool(right_pressed or legacy_right)
-    except Exception:
-        pass
-
-    # Event path (optional third source)
-    try:
-        system = openvr.VRSystem()
-        poll_event_fn = getattr(system, "pollNextEvent", None) or getattr(system, "PollNextEvent", None)
-        if poll_event_fn:
-            ev_press = getattr(openvr, "VREvent_ButtonPress", 200)
-            ev_unpress = getattr(openvr, "VREvent_ButtonUnpress", 201)
-            trig_btn = getattr(openvr, "k_EButton_SteamVR_Trigger", 33)
-            get_role_fn = getattr(system, "getControllerRoleForTrackedDeviceIndex", None) or getattr(system, "GetControllerRoleForTrackedDeviceIndex", None)
-            for _ in range(32):
-                try:
-                    raw = poll_event_fn(openvr.VREvent_t())
-                except Exception:
-                    try:
-                        raw = poll_event_fn()
-                    except Exception:
-                        break
-                if isinstance(raw, tuple):
-                    has_event = bool(raw[0]) if raw else False
-                    ev = raw[1] if len(raw) >= 2 else None
-                else:
-                    has_event = bool(raw)
-                    ev = raw
-                if not has_event:
-                    break
-                if not ev:
-                    continue
-                et = int(getattr(ev, "eventType", -1))
-                if et not in (ev_press, ev_unpress):
-                    continue
-                btn = int(getattr(getattr(getattr(ev, "data", None), "controller", None), "button", -1))
-                if btn != trig_btn:
-                    continue
-                idx = int(getattr(ev, "trackedDeviceIndex", -1))
-                role = None
-                if get_role_fn and idx >= 0:
-                    try:
-                        role = get_role_fn(idx)
-                    except Exception:
-                        role = None
-                is_press = et == ev_press
-                if role == getattr(openvr, "TrackedControllerRole_LeftHand", 1):
-                    trigger_click_state["event_left"] = is_press
-                    if is_press:
-                        print(f"[OpenVR] Trigger click fired (event left idx={idx})")
-                elif role == getattr(openvr, "TrackedControllerRole_RightHand", 2):
-                    trigger_click_state["event_right"] = is_press
-                    if is_press:
-                        print(f"[OpenVR] Trigger click fired (event right idx={idx})")
-    except Exception:
-        pass
-
-    left_pressed = bool(left_pressed or trigger_click_state.get("event_left", False))
-    right_pressed = bool(right_pressed or trigger_click_state.get("event_right", False))
-
-    current_states = {
-        "left": left_pressed,
-        "right": right_pressed,
-        "interact_ui": bool((i_l_active and i_l_state) or (i_r_active and i_r_state)),
-    }
-    for key, is_pressed in current_states.items():
-        was_pressed = trigger_click_state.get(key, False)
-        if is_pressed and not was_pressed:
-            print(f"[OpenVR] Trigger click fired (edge): {key}")
-        trigger_click_state[key] = is_pressed
-
-    if left_pressed or right_pressed or (trigger_debug_counter % 120 == 0):
-        print(
-            "[OpenVR][TriggerDebug][Final] "
-            f"left={left_pressed} right={right_pressed} "
-            f"event_left={trigger_click_state.get('event_left', False)} event_right={trigger_click_state.get('event_right', False)}"
-        )
-
-    return float(left_pressed), float(right_pressed)
 
 
 def _get_input(ovr_context: OVRContext) -> dict[str, dict[str, float]] | None:
@@ -579,15 +326,12 @@ def _get_input(ovr_context: OVRContext) -> dict[str, dict[str, float]] | None:
         previous_left = latest_input_state["left"].copy()
         previous_right = latest_input_state["right"].copy()
 
-    left_trigger, right_trigger = _controller_trigger_values(vr_ipt, ovr_context)
-
     left_data = {
         "thumb_curl": float((l_skeletal or {}).get("thumb", previous_left["thumb_curl"])),
         "index_curl": float((l_skeletal or {}).get("index", previous_left["index_curl"])),
         "middle_curl": float((l_skeletal or {}).get("middle", previous_left["middle_curl"])),
         "ring_curl": float((l_skeletal or {}).get("ring", previous_left["ring_curl"])),
         "pinky_curl": float((l_skeletal or {}).get("pinky", previous_left["pinky_curl"])),
-        TRIGGER_CHANNEL: float(left_trigger),
     }
     right_data = {
         "thumb_curl": float((r_skeletal or {}).get("thumb", previous_right["thumb_curl"])),
@@ -595,7 +339,6 @@ def _get_input(ovr_context: OVRContext) -> dict[str, dict[str, float]] | None:
         "middle_curl": float((r_skeletal or {}).get("middle", previous_right["middle_curl"])),
         "ring_curl": float((r_skeletal or {}).get("ring", previous_right["ring_curl"])),
         "pinky_curl": float((r_skeletal or {}).get("pinky", previous_right["pinky_curl"])),
-        TRIGGER_CHANNEL: float(right_trigger),
     }
 
     return {"left": left_data, "right": right_data}
