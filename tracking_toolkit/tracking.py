@@ -24,7 +24,7 @@ buffer_lock = threading.Lock()
 recording_active = False
 action_sets = []
 action_handles = {}
-trigger_click_state = {"left": False, "right": False, "interact_ui": False}
+trigger_click_state = {"left": False, "right": False, "interact_ui": False, "event_left": False, "event_right": False}
 
 FINGER_CHANNELS = ("thumb_curl", "index_curl", "middle_curl", "ring_curl", "pinky_curl")
 TRIGGER_CHANNEL = "trigger_value"
@@ -242,6 +242,71 @@ def _controller_trigger_values(vr_ipt, ovr_context: OVRContext) -> tuple[float, 
     # Fallbacks for environments where action data is unavailable/inactive.
     try:
         system = openvr.VRSystem()
+
+        # Additional path: OpenVR event queue (button press/unpress events).
+        event_button_press = getattr(openvr, "VREvent_ButtonPress", 200)
+        event_button_unpress = getattr(openvr, "VREvent_ButtonUnpress", 201)
+        trigger_button = getattr(openvr, "k_EButton_SteamVR_Trigger", 33)
+
+        poll_event_fn = getattr(system, "pollNextEvent", None) or getattr(system, "PollNextEvent", None)
+        get_role_fn_global = getattr(system, "getControllerRoleForTrackedDeviceIndex", None) or getattr(system, "GetControllerRoleForTrackedDeviceIndex", None)
+        if poll_event_fn:
+            for _ in range(64):
+                event_obj = None
+                try:
+                    raw = poll_event_fn(openvr.VREvent_t())
+                except Exception:
+                    try:
+                        raw = poll_event_fn()
+                    except Exception:
+                        break
+
+                if isinstance(raw, tuple):
+                    has_event = bool(raw[0]) if raw else False
+                    if len(raw) >= 2:
+                        event_obj = raw[1]
+                else:
+                    has_event = bool(raw)
+                    event_obj = raw
+
+                if not has_event:
+                    break
+                if event_obj is None:
+                    continue
+
+                event_type = int(getattr(event_obj, "eventType", -1))
+                if event_type not in (event_button_press, event_button_unpress):
+                    continue
+
+                data = getattr(event_obj, "data", None)
+                controller_data = getattr(data, "controller", None) if data else None
+                event_button = int(getattr(controller_data, "button", -1)) if controller_data else -1
+                if event_button != trigger_button:
+                    continue
+
+                tracked_idx = int(getattr(event_obj, "trackedDeviceIndex", -1))
+                role = None
+                if get_role_fn_global and tracked_idx >= 0:
+                    try:
+                        role = get_role_fn_global(tracked_idx)
+                    except Exception:
+                        role = None
+
+                side = "unknown"
+                if role == getattr(openvr, "TrackedControllerRole_LeftHand", 1):
+                    side = "left"
+                elif role == getattr(openvr, "TrackedControllerRole_RightHand", 2):
+                    side = "right"
+
+                is_press = (event_type == event_button_press)
+                if side == "left":
+                    trigger_click_state["event_left"] = is_press
+                elif side == "right":
+                    trigger_click_state["event_right"] = is_press
+
+                if is_press:
+                    print(f"[OpenVR] Trigger click fired (event): side={side} device={tracked_idx}")
+
         left_role = getattr(openvr, "TrackedControllerRole_LeftHand", 1)
         right_role = getattr(openvr, "TrackedControllerRole_RightHand", 2)
         role_prop = getattr(openvr, "Prop_ControllerRoleHint_Int32", None)
@@ -327,8 +392,8 @@ def _controller_trigger_values(vr_ipt, ovr_context: OVRContext) -> tuple[float, 
         pass
 
     current_states = {
-        "left": bool(left_active and left_pressed),
-        "right": bool(right_active and right_pressed),
+        "left": bool(left_active and left_pressed) or bool(trigger_click_state.get("event_left", False)),
+        "right": bool(right_active and right_pressed) or bool(trigger_click_state.get("event_right", False)),
         "interact_ui": bool(interact_active and interact_pressed),
     }
 
@@ -337,6 +402,9 @@ def _controller_trigger_values(vr_ipt, ovr_context: OVRContext) -> tuple[float, 
         if is_pressed and not was_pressed:
             print(f"[OpenVR] Trigger click fired (edge): {key}")
         trigger_click_state[key] = is_pressed
+
+    left_pressed = bool(left_pressed or trigger_click_state.get("event_left", False))
+    right_pressed = bool(right_pressed or trigger_click_state.get("event_right", False))
 
     return float(left_pressed), float(right_pressed)
 
