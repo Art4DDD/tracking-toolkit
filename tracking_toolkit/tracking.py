@@ -109,6 +109,8 @@ def init_handles():
     action_handles = {
         "l_skeleton": _get_action_handle("/actions/default/in/SkeletonLeftHand"),
         "r_skeleton": _get_action_handle("/actions/default/in/SkeletonRightHand"),
+        "l_trigger_click": _get_action_handle("/actions/default/in/TriggerClickLeft"),
+        "r_trigger_click": _get_action_handle("/actions/default/in/TriggerClickRight"),
     }
 
     print("Initialized OpenVR skeletal action handles")
@@ -153,69 +155,41 @@ def _handle_input(ovr_context: OVRContext, input_state: dict[str, dict[str, floa
         root_obj[channel] = value
 
 
-def _controller_trigger_values(ovr_context: OVRContext) -> tuple[float, float]:
-    system = openvr.VRSystem()
+def _controller_trigger_values(vr_ipt) -> tuple[float, float]:
+    def _digital_value(action_key: str) -> float:
+        action = action_handles.get(action_key)
+        if action is None:
+            return 0.0
 
-    left_role = getattr(openvr, "TrackedControllerRole_LeftHand", 1)
-    right_role = getattr(openvr, "TrackedControllerRole_RightHand", 2)
-    role_prop = getattr(openvr, "Prop_ControllerRoleHint_Int32", None)
-    trigger_button = getattr(openvr, "k_EButton_SteamVR_Trigger", 33)
-    trigger_mask = 1 << trigger_button
+        get_digital_fn = getattr(vr_ipt, "getDigitalActionData", None) or getattr(vr_ipt, "GetDigitalActionData", None)
+        if not get_digital_fn:
+            return 0.0
 
-    left_value = 0.0
-    right_value = 0.0
+        variants = [
+            lambda: get_digital_fn(action),
+            lambda: get_digital_fn(action, openvr.k_ulInvalidInputValueHandle),
+        ]
 
-    for tracker in ovr_context.trackers:
-        if tracker.type != str(openvr.TrackedDeviceClass_Controller):
-            continue
-
-        role = None
-        if role_prop is not None:
+        for call in variants:
             try:
-                role = system.getInt32TrackedDeviceProperty(tracker.index, role_prop)
+                digital_data = call()
             except Exception:
-                role = None
+                continue
 
-        if role is None:
-            get_role_fn = getattr(system, "getControllerRoleForTrackedDeviceIndex", None) or getattr(system, "GetControllerRoleForTrackedDeviceIndex", None)
-            if get_role_fn:
-                try:
-                    role = get_role_fn(tracker.index)
-                except Exception:
-                    role = None
+            if isinstance(digital_data, tuple) and len(digital_data) >= 1:
+                digital_data = digital_data[0]
 
-        if role is None:
-            continue
+            if not digital_data:
+                continue
 
-        try:
-            controller_state = system.getControllerState(tracker.index)
-        except Exception:
-            continue
+            active = _safe_getattr_bool(digital_data, "bActive", True)
+            state = _safe_getattr_bool(digital_data, "bState", False)
+            if active and state:
+                return 1.0
 
-        if isinstance(controller_state, tuple):
-            if len(controller_state) >= 2:
-                controller_state = controller_state[1]
-            elif len(controller_state) == 1:
-                controller_state = controller_state[0]
+        return 0.0
 
-        axis_candidates = []
-        for axis_index in (1, 2):
-            for component in ("x", "y"):
-                try:
-                    axis_candidates.append(abs(float(getattr(controller_state.rAxis[axis_index], component))))
-                except Exception:
-                    continue
-        axis_value = max(axis_candidates) if axis_candidates else 0.0
-
-        button_pressed = bool(getattr(controller_state, "ulButtonPressed", 0) & trigger_mask)
-        trigger_value = max(axis_value, 1.0 if button_pressed else 0.0)
-
-        if role == left_role:
-            left_value = trigger_value
-        elif role == right_role:
-            right_value = trigger_value
-
-    return left_value, right_value
+    return _digital_value("l_trigger_click"), _digital_value("r_trigger_click")
 
 
 def _get_input(ovr_context: OVRContext) -> dict[str, dict[str, float]] | None:
@@ -369,7 +343,7 @@ def _get_input(ovr_context: OVRContext) -> dict[str, dict[str, float]] | None:
         previous_left = latest_input_state["left"].copy()
         previous_right = latest_input_state["right"].copy()
 
-    left_trigger, right_trigger = _controller_trigger_values(ovr_context)
+    left_trigger, right_trigger = _controller_trigger_values(vr_ipt)
 
     left_data = {
         "thumb_curl": float((l_skeletal or {}).get("thumb", previous_left["thumb_curl"])),

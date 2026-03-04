@@ -9,6 +9,14 @@
       "name": "/actions/default/in/SkeletonRightHand",
       "type": "skeleton",
       "skeleton": "/skeleton/hand/right"
+    },
+    {
+      "name": "/actions/default/in/TriggerClickLeft",
+      "type": "boolean"
+    },
+    {
+      "name": "/actions/default/in/TriggerClickRight",
+      "type": "boolean"
     }
   ],
   "action_sets": [
@@ -27,7 +35,9 @@
     {
       "language_tag": "en_US",
       "/actions/default/in/SkeletonLeftHand": "Skeleton (Left)",
-      "/actions/default/in/SkeletonRightHand": "Skeleton (Right)"
+      "/actions/default/in/SkeletonRightHand": "Skeleton (Right)",
+      "/actions/default/in/TriggerClickLeft": "Trigger Click (Left)",
+      "/actions/default/in/TriggerClickRight": "Trigger Click (Right)"
     }
   ]
 }

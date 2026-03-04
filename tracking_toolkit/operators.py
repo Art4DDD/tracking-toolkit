@@ -50,7 +50,6 @@ class ConvertSubframesOperator(bpy.types.Operator):
                     key.handle_left.x += frame_delta
                     key.handle_right.x += frame_delta
                     key_count += 1
-                fcurve.update()
 
         self.report({"INFO"}, f"Converted {key_count} keyframes to integer frames")
         return {"FINISHED"}
