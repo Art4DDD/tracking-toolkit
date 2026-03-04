@@ -5,6 +5,7 @@ from .operators import (
     ToggleActiveOperator,
     CreateRefsOperator,
     ToggleRecordOperator,
+    ConvertSubframesOperator,
 )
 from .properties import OVRContext
 
@@ -59,25 +60,37 @@ class RecorderPanel(View3DPanel, bpy.types.Panel):
         root_obj = bpy.data.objects.get("OVR Root")
         has_references = ovr_context.references_created and bool(root_obj)
 
-        if not ovr_context.enabled or not has_references:
+        if ovr_context.enabled and has_references:
+            layout.label(text="Recording")
+
+            record_btn_row = layout.row()
+            record_btn_row.scale_y = 2
+            record_btn_row.alert = ovr_context.recording
+
+            active_record_label = "Stop Recording" if ovr_context.recording else "Start Recording"
+            active_record_icon = "RECORD_ON" if ovr_context.recording else "RECORD_OFF"
+
+            # noinspection PyTypeChecker
+            record_btn_row.operator(
+                ToggleRecordOperator.bl_idname,
+                text=active_record_label,
+                icon=active_record_icon,
+                depress=True,
+            )
+
+        show_tools = ovr_context.enabled or bool(root_obj)
+        if not show_tools:
             return
+        if ovr_context.recordings_made:
+            convert_box = layout.box()
+            convert_col = convert_box.column(align=True)
+            convert_col.scale_y = 1.0
+            convert_col.operator(ConvertSubframesOperator.bl_idname, text="Convert", icon="KEYTYPE_KEYFRAME_VEC", emboss=False)
+            convert_col.operator(ConvertSubframesOperator.bl_idname, text="Subframes To Frames", emboss=False)
+Subframes To Frames", icon="KEYTYPE_KEYFRAME_VEC")
 
-        layout.label(text="Recording")
-
-        record_btn_row = layout.row()
-        record_btn_row.scale_y = 2
-        record_btn_row.alert = ovr_context.recording
-
-        active_record_label = "Stop Recording" if ovr_context.recording else "Start Recording"
-        active_record_icon = "RECORD_ON" if ovr_context.recording else "RECORD_OFF"
-
-        # noinspection PyTypeChecker
-        record_btn_row.operator(
-            ToggleRecordOperator.bl_idname,
-            text=active_record_label,
-            icon=active_record_icon,
-            depress=True,
-        )
+        if not (ovr_context.references_ever_created and root_obj):
+            return
 
         layout.label(text="Skeletal Fingers")
 

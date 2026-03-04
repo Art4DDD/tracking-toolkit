@@ -18,6 +18,57 @@ TRACKER_BOX_EDGES = [
 ]
 
 
+class ConvertSubframesOperator(bpy.types.Operator):
+    bl_idname = "id.convert_subframes_to_frames"
+    bl_label = "Convert subframes to frames"
+    bl_description = "Snap keyframe times to unique whole frames while keeping the curve smooth"
+    bl_options = {"UNDO"}
+
+    def execute(self, context):
+        ovr_context: OVRContext = context.scene.OVRContext
+
+        target_names = {"OVR Root"}
+        for tracker in ovr_context.trackers:
+            target_names.add(tracker.name)
+            if tracker.target.object:
+                target_names.add(tracker.target.object.name)
+
+        actions = set()
+        for obj_name in target_names:
+            obj = bpy.data.objects.get(obj_name)
+            if obj and obj.animation_data and obj.animation_data.action:
+                actions.add(obj.animation_data.action)
+
+        key_count = 0
+        for action in actions:
+            for fcurve in action.fcurves:
+                keys = list(fcurve.keyframe_points)
+                if not keys:
+                    continue
+
+                target_frames = sorted({int(round(float(key.co.x))) for key in keys})
+                sampled_values = [float(fcurve.evaluate(frame)) for frame in target_frames]
+
+                fcurve.keyframe_points.clear()
+                fcurve.keyframe_points.add(len(target_frames))
+
+                key_coords = [0.0] * (len(target_frames) * 2)
+                key_coords[0::2] = target_frames
+                key_coords[1::2] = sampled_values
+                fcurve.keyframe_points.foreach_set("co", key_coords)
+
+                for key in fcurve.keyframe_points:
+                    key.interpolation = "BEZIER"
+                    key.handle_left_type = "AUTO_CLAMPED"
+                    key.handle_right_type = "AUTO_CLAMPED"
+
+                fcurve.update()
+                key_count += len(target_frames)
+
+        self.report({"INFO"}, f"Converted {key_count} keyframes to integer frames")
+        return {"FINISHED"}
+
+
 class ToggleRecordOperator(bpy.types.Operator):
     bl_idname = "id.toggle_recording"
     bl_label = "Toggle OpenVR recording"
@@ -117,6 +168,7 @@ class CreateRefsOperator(bpy.types.Operator):
                 if item.get("_ovr_tracker_box"):
                     continue
                 item.hide_select = True
+                item.hide_render = True
 
         def _delete_with_descendants(roots: list[bpy.types.Object]):
             items = list(_iter_hierarchy(roots))
@@ -417,6 +469,7 @@ class CreateRefsOperator(bpy.types.Operator):
             pass
 
         ovr_context.references_created = True
+        ovr_context.references_ever_created = True
         start_preview(ovr_context)
         print("Done")
         return {"FINISHED"}

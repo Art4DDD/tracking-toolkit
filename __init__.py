@@ -14,6 +14,7 @@ from .tracking_toolkit.operators import (
     CreateRefsOperator,
     ToggleActiveOperator,
     ToggleRecordOperator,
+    ConvertSubframesOperator,
 )
 from .tracking_toolkit.properties import (
     OVRContext,
@@ -54,6 +55,7 @@ def register():
     bpy.utils.register_class(ToggleActiveOperator)
     bpy.utils.register_class(CreateRefsOperator)
     bpy.utils.register_class(ToggleRecordOperator)
+    bpy.utils.register_class(ConvertSubframesOperator)
 
     bpy.types.Scene.OVRContext = bpy.props.PointerProperty(type=OVRContext)
 
@@ -74,6 +76,7 @@ def unregister():
 
     del bpy.types.Scene.OVRContext
 
+    bpy.utils.unregister_class(ConvertSubframesOperator)
     bpy.utils.unregister_class(ToggleRecordOperator)
     bpy.utils.unregister_class(CreateRefsOperator)
     bpy.utils.unregister_class(ToggleActiveOperator)

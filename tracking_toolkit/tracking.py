@@ -26,10 +26,10 @@ action_sets = []
 action_handles = {}
 
 FINGER_CHANNELS = ("thumb_curl", "index_curl", "middle_curl", "ring_curl", "pinky_curl")
-
+TRIGGER_CHANNEL = "trigger_value"
 latest_input_state = {
-    "left": {channel: 0.0 for channel in FINGER_CHANNELS},
-    "right": {channel: 0.0 for channel in FINGER_CHANNELS},
+    "left": {channel: 0.0 for channel in (*FINGER_CHANNELS, TRIGGER_CHANNEL)},
+    "right": {channel: 0.0 for channel in (*FINGER_CHANNELS, TRIGGER_CHANNEL)},
 }
 
 FINGER_BONE_CHAINS = {
@@ -105,6 +105,8 @@ def init_handles():
     action_handles = {
         "l_skeleton": _get_action_handle("/actions/default/in/SkeletonLeftHand"),
         "r_skeleton": _get_action_handle("/actions/default/in/SkeletonRightHand"),
+        "l_trigger_click": _get_action_handle("/actions/default/in/TriggerClickLeft"),
+        "r_trigger_click": _get_action_handle("/actions/default/in/TriggerClickRight"),
     }
 
     print("Initialized OpenVR skeletal action handles")
@@ -121,12 +123,14 @@ def _handle_input(ovr_context: OVRContext, input_state: dict[str, dict[str, floa
     ovr_context.l_input.middle_curl = float(left_state.get("middle_curl", 0.0))
     ovr_context.l_input.ring_curl = float(left_state.get("ring_curl", 0.0))
     ovr_context.l_input.pinky_curl = float(left_state.get("pinky_curl", 0.0))
+    ovr_context.l_input.trigger_strength = float(left_state.get(TRIGGER_CHANNEL, 0.0))
 
     ovr_context.r_input.thumb_curl = float(right_state.get("thumb_curl", 0.0))
     ovr_context.r_input.index_curl = float(right_state.get("index_curl", 0.0))
     ovr_context.r_input.middle_curl = float(right_state.get("middle_curl", 0.0))
     ovr_context.r_input.ring_curl = float(right_state.get("ring_curl", 0.0))
     ovr_context.r_input.pinky_curl = float(right_state.get("pinky_curl", 0.0))
+    ovr_context.r_input.trigger_strength = float(right_state.get(TRIGGER_CHANNEL, 0.0))
 
     channel_map = {
         "left_thumb_curl": ovr_context.l_input.thumb_curl,
@@ -147,28 +151,107 @@ def _handle_input(ovr_context: OVRContext, input_state: dict[str, dict[str, floa
         root_obj[channel] = value
 
 
-def _get_input() -> dict[str, dict[str, float]] | None:
-    if not (action_handles and action_sets):
-        return
+def _controller_trigger_values(vr_ipt, ovr_context: OVRContext) -> tuple[float, float]:
+    def _digital_state(action_key: str) -> tuple[bool, bool]:
+        action = action_handles.get(action_key)
+        if action is None:
+            return False, False
 
-    vr_ipt = openvr.VRInput()
-    updated = False
-    update_variants = [
-        lambda: vr_ipt.updateActionState(action_sets, ctypes.sizeof(openvr.VRActiveActionSet_t), len(action_sets)),
-        lambda: vr_ipt.updateActionState(action_sets),
-        lambda: vr_ipt.updateActionState(action_sets[0], ctypes.sizeof(openvr.VRActiveActionSet_t), 1),
-    ]
+        get_digital_fn = getattr(vr_ipt, "getDigitalActionData", None) or getattr(vr_ipt, "GetDigitalActionData", None)
+        if not get_digital_fn:
+            return False, False
 
-    for update_call in update_variants:
+        variants = [
+            lambda: get_digital_fn(action),
+            lambda: get_digital_fn(action, openvr.k_ulInvalidInputValueHandle),
+        ]
+
+        for call in variants:
+            try:
+                digital_data = call()
+            except Exception:
+                continue
+
+            if isinstance(digital_data, tuple) and len(digital_data) >= 1:
+                digital_data = digital_data[0]
+
+            if not digital_data:
+                continue
+
+            active = _safe_getattr_bool(digital_data, "bActive", True)
+            state = _safe_getattr_bool(digital_data, "bState", False)
+            return active, state
+
+        return False, False
+
+    left_active, left_pressed = _digital_state("l_trigger_click")
+    right_active, right_pressed = _digital_state("r_trigger_click")
+
+    if not (left_active or right_active):
         try:
-            update_call()
-            updated = True
-            break
-        except Exception:
-            continue
+            system = openvr.VRSystem()
+            left_role = getattr(openvr, "TrackedControllerRole_LeftHand", 1)
+            right_role = getattr(openvr, "TrackedControllerRole_RightHand", 2)
+            role_prop = getattr(openvr, "Prop_ControllerRoleHint_Int32", None)
+            trigger_button = getattr(openvr, "k_EButton_SteamVR_Trigger", 33)
+            trigger_mask = 1 << trigger_button
 
-    if not updated:
-        return None
+            for tracker in ovr_context.trackers:
+                if tracker.type != str(openvr.TrackedDeviceClass_Controller):
+                    continue
+
+                role = None
+                if role_prop is not None:
+                    try:
+                        role = system.getInt32TrackedDeviceProperty(tracker.index, role_prop)
+                    except Exception:
+                        role = None
+
+                if role is None:
+                    get_role_fn = getattr(system, "getControllerRoleForTrackedDeviceIndex", None) or getattr(system, "GetControllerRoleForTrackedDeviceIndex", None)
+                    if get_role_fn:
+                        try:
+                            role = get_role_fn(tracker.index)
+                        except Exception:
+                            role = None
+
+                try:
+                    controller_state = system.getControllerState(tracker.index)
+                except Exception:
+                    continue
+
+                if isinstance(controller_state, tuple):
+                    controller_state = controller_state[1] if len(controller_state) >= 2 else controller_state[0]
+
+                pressed = bool(getattr(controller_state, "ulButtonPressed", 0) & trigger_mask)
+                if role == left_role:
+                    left_active, left_pressed = True, pressed
+                elif role == right_role:
+                    right_active, right_pressed = True, pressed
+        except Exception:
+            pass
+
+    return float(left_pressed), float(right_pressed)
+
+
+def _get_input(ovr_context: OVRContext) -> dict[str, dict[str, float]] | None:
+    vr_ipt = openvr.VRInput()
+
+    updated = False
+    if action_handles and action_sets:
+        update_variants = [
+            lambda: vr_ipt.updateActionState(action_sets, ctypes.sizeof(openvr.VRActiveActionSet_t), len(action_sets)),
+            lambda: vr_ipt.updateActionState(action_sets),
+            lambda: vr_ipt.updateActionState(action_sets[0], ctypes.sizeof(openvr.VRActiveActionSet_t), 1),
+        ]
+
+        for update_call in update_variants:
+            try:
+                update_call()
+                updated = True
+                break
+            except Exception:
+                continue
 
     def _calc_finger_curl(bone_transforms, chain: tuple[int, ...]) -> float:
         if len(chain) < 2:
@@ -295,12 +378,14 @@ def _get_input() -> dict[str, dict[str, float]] | None:
             return None
         return result
 
-    l_skeletal = _get_skeletal_finger_curls("l_skeleton")
-    r_skeletal = _get_skeletal_finger_curls("r_skeleton")
+    l_skeletal = _get_skeletal_finger_curls("l_skeleton") if updated else None
+    r_skeletal = _get_skeletal_finger_curls("r_skeleton") if updated else None
 
     with buffer_lock:
         previous_left = latest_input_state["left"].copy()
         previous_right = latest_input_state["right"].copy()
+
+    left_trigger, right_trigger = _controller_trigger_values(vr_ipt, ovr_context)
 
     left_data = {
         "thumb_curl": float((l_skeletal or {}).get("thumb", previous_left["thumb_curl"])),
@@ -308,6 +393,7 @@ def _get_input() -> dict[str, dict[str, float]] | None:
         "middle_curl": float((l_skeletal or {}).get("middle", previous_left["middle_curl"])),
         "ring_curl": float((l_skeletal or {}).get("ring", previous_left["ring_curl"])),
         "pinky_curl": float((l_skeletal or {}).get("pinky", previous_left["pinky_curl"])),
+        TRIGGER_CHANNEL: float(left_trigger),
     }
     right_data = {
         "thumb_curl": float((r_skeletal or {}).get("thumb", previous_right["thumb_curl"])),
@@ -315,6 +401,7 @@ def _get_input() -> dict[str, dict[str, float]] | None:
         "middle_curl": float((r_skeletal or {}).get("middle", previous_right["middle_curl"])),
         "ring_curl": float((r_skeletal or {}).get("ring", previous_right["ring_curl"])),
         "pinky_curl": float((r_skeletal or {}).get("pinky", previous_right["pinky_curl"])),
+        TRIGGER_CHANNEL: float(right_trigger),
     }
 
     return {"left": left_data, "right": right_data}
@@ -354,7 +441,7 @@ def _openvr_poll_thread_func(ovr_context: OVRContext):
             if recording_active:
                 record_buffer.append(pose_chunk)
 
-        input_state = _get_input()
+        input_state = _get_input(ovr_context)
         if input_state:
             with buffer_lock:
                 latest_input_state = {
@@ -405,8 +492,14 @@ def _get_latest_poses() -> list[tuple[datetime.datetime, OVRTracker, Matrix]] | 
 
 
 def _apply_poses():
+    # During undo/redo Blender may not provide a valid screen, skip preview safely.
+    try:
+        screen = bpy.context.screen
+    except Exception:
+        return
+
     # Don't preview when playing, since a previous recording may interfere
-    if bpy.context.screen.is_animation_playing:
+    if not screen or screen.is_animation_playing:
         return
 
     pose_data = _get_latest_poses()
@@ -417,7 +510,12 @@ def _apply_poses():
     root_world = root_obj.matrix_world.copy() if root_obj else Matrix.Identity(4)
 
     for time, tracker, pose in pose_data:
-        tracker_obj = bpy.data.objects.get(tracker.name)
+        try:
+            tracker_name = tracker.name
+        except ReferenceError:
+            continue
+
+        tracker_obj = bpy.data.objects.get(tracker_name)
         if not tracker_obj:
             continue
 
@@ -426,7 +524,11 @@ def _apply_poses():
 
 def _pose_vis_timer():
     _apply_poses()
-    ovr_context = getattr(bpy.context.scene, "OVRContext", None)
+    scene = getattr(bpy.context, "scene", None)
+    if scene is None:
+        return 1.0 / 60
+
+    ovr_context = getattr(scene, "OVRContext", None)
     if ovr_context:
         with buffer_lock:
             input_state = {
@@ -434,6 +536,7 @@ def _pose_vis_timer():
                 "right": latest_input_state["right"].copy(),
             }
         _handle_input(ovr_context, input_state)
+
     return 1.0 / 60  # 60hz
 
 
@@ -642,6 +745,8 @@ def stop_recording(ovr_context: OVRContext | None):
     recording_active = False
     stop_preview()
     _insert_action(ovr_context)
+    if ovr_context:
+        ovr_context.recordings_made = True
     _clear_buffer()
     start_preview(ovr_context)
 
