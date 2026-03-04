@@ -24,6 +24,7 @@ buffer_lock = threading.Lock()
 recording_active = False
 action_sets = []
 action_handles = {}
+trigger_click_state = {"left": False, "right": False, "interact_ui": False}
 
 FINGER_CHANNELS = ("thumb_curl", "index_curl", "middle_curl", "ring_curl", "pinky_curl")
 TRIGGER_CHANNEL = "trigger_value"
@@ -107,6 +108,7 @@ def init_handles():
         "r_skeleton": _get_action_handle("/actions/default/in/SkeletonRightHand"),
         "l_trigger_click": _get_action_handle("/actions/default/in/TriggerClickLeft"),
         "r_trigger_click": _get_action_handle("/actions/default/in/TriggerClickRight"),
+        "interact_ui": _get_action_handle("/actions/default/in/InteractUI"),
     }
 
     print("Initialized OpenVR skeletal action handles")
@@ -186,6 +188,23 @@ def _controller_trigger_values(vr_ipt, ovr_context: OVRContext) -> tuple[float, 
 
     left_active, left_pressed = _digital_state("l_trigger_click")
     right_active, right_pressed = _digital_state("r_trigger_click")
+    interact_active, interact_pressed = _digital_state("interact_ui")
+
+    if interact_active and not right_active:
+        right_active, right_pressed = True, interact_pressed
+
+    global trigger_click_state
+    current_states = {
+        "left": bool(left_active and left_pressed),
+        "right": bool(right_active and right_pressed),
+        "interact_ui": bool(interact_active and interact_pressed),
+    }
+
+    for key, is_pressed in current_states.items():
+        was_pressed = trigger_click_state.get(key, False)
+        if is_pressed and not was_pressed:
+            print(f"[OpenVR] Trigger click fired: {key}")
+        trigger_click_state[key] = is_pressed
 
     if not (left_active or right_active):
         try:
