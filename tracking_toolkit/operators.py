@@ -117,6 +117,7 @@ class CreateRefsOperator(bpy.types.Operator):
                 if item.get("_ovr_tracker_box"):
                     continue
                 item.hide_select = True
+                item.hide_render = True
 
         def _delete_with_descendants(roots: list[bpy.types.Object]):
             items = list(_iter_hierarchy(roots))
