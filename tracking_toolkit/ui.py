@@ -138,3 +138,16 @@ class RecorderPanel(View3DPanel, bpy.types.Panel):
 
         draw_action_props(layout, "Left Hand Actions", "left")
         draw_action_props(layout, "Right Hand Actions", "right")
+
+        layout.label(text="Right Trigger (/user/hand/right/input/trigger)")
+        trigger_box = layout.box()
+        for suffix, label in (
+            ("trigger_click", "Click"),
+            ("trigger_touch", "Touch"),
+            ("trigger_pull", "Pull"),
+            ("trigger_delta", "Delta"),
+        ):
+            channel = f"right_{suffix}"
+            if channel not in root_obj:
+                root_obj[channel] = 0.0
+            trigger_box.prop(root_obj, f'["{channel}"]', text=label)

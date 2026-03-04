@@ -35,6 +35,9 @@ ACTION_CHANNELS = (
     "squeeze",
     "snap_turn_left",
     "snap_turn_right",
+    "trigger_pull",
+    "trigger_delta",
+    "trigger_touch",
 )
 latest_input_state = {
     "left": {channel: 0.0 for channel in (*FINGER_CHANNELS, *ACTION_CHANNELS)},
@@ -196,7 +199,7 @@ def _handle_input(ovr_context: OVRContext, input_state: dict[str, dict[str, floa
     ovr_context.r_input.middle_curl = float(right_state.get("middle_curl", 0.0))
     ovr_context.r_input.ring_curl = float(right_state.get("ring_curl", 0.0))
     ovr_context.r_input.pinky_curl = float(right_state.get("pinky_curl", 0.0))
-    ovr_context.r_input.trigger_strength = float(right_state.get("squeeze", 0.0))
+    ovr_context.r_input.trigger_strength = float(right_state.get("trigger_pull", right_state.get("squeeze", 0.0)))
     ovr_context.r_input.a_button = bool(right_state.get("trigger_click", 0.0))
     ovr_context.r_input.b_button = bool(right_state.get("teleport", 0.0))
 
@@ -220,6 +223,9 @@ def _handle_input(ovr_context: OVRContext, input_state: dict[str, dict[str, floa
         "right_ring_curl": ovr_context.r_input.ring_curl,
         "right_pinky_curl": ovr_context.r_input.pinky_curl,
         "right_trigger_click": float(right_state.get("trigger_click", 0.0)),
+        "right_trigger_pull": float(right_state.get("trigger_pull", 0.0)),
+        "right_trigger_delta": float(right_state.get("trigger_delta", 0.0)),
+        "right_trigger_touch": float(right_state.get("trigger_touch", 0.0)),
         "right_interact_ui": float(right_state.get("interact_ui", 0.0)),
         "right_teleport": float(right_state.get("teleport", 0.0)),
         "right_grab_pinch": float(right_state.get("grab_pinch", 0.0)),
@@ -260,6 +266,64 @@ def _get_input(ovr_context: OVRContext) -> dict[str, dict[str, float]] | None:
                 continue
         if not updated:
             print(f"[OpenVR] updateActionState failed for all variants: {last_update_error}")
+
+    def _get_right_trigger_values() -> dict[str, float]:
+        system = openvr.VRSystem()
+        get_index_fn = getattr(system, "getTrackedDeviceIndexForControllerRole", None) or getattr(system, "GetTrackedDeviceIndexForControllerRole", None)
+        get_state_fn = getattr(system, "getControllerState", None) or getattr(system, "GetControllerState", None)
+        if not get_index_fn or not get_state_fn:
+            return {"trigger_pull": 0.0, "trigger_delta": 0.0, "trigger_touch": 0.0, "trigger_click": 0.0}
+
+        role = getattr(openvr, "TrackedControllerRole_RightHand", 2)
+        invalid_index = getattr(openvr, "k_unTrackedDeviceIndexInvalid", 0xFFFFFFFF)
+
+        try:
+            right_idx = int(get_index_fn(role))
+        except Exception:
+            return {"trigger_pull": 0.0, "trigger_delta": 0.0, "trigger_touch": 0.0, "trigger_click": 0.0}
+
+        if right_idx == int(invalid_index):
+            return {"trigger_pull": 0.0, "trigger_delta": 0.0, "trigger_touch": 0.0, "trigger_click": 0.0}
+
+        state_result = None
+        for read_call in (
+            lambda: get_state_fn(right_idx),
+            lambda: get_state_fn(right_idx, 0),
+        ):
+            try:
+                state_result = read_call()
+                break
+            except Exception:
+                continue
+
+        if state_result is None:
+            return {"trigger_pull": 0.0, "trigger_delta": 0.0, "trigger_touch": 0.0, "trigger_click": 0.0}
+
+        state = state_result
+        if isinstance(state_result, tuple):
+            bool_values = [value for value in state_result if isinstance(value, bool)]
+            if bool_values and not any(bool_values):
+                return {"trigger_pull": 0.0, "trigger_delta": 0.0, "trigger_touch": 0.0, "trigger_click": 0.0}
+            state_candidates = [value for value in state_result if hasattr(value, "rAxis")]
+            if state_candidates:
+                state = state_candidates[0]
+
+        r_axis = getattr(state, "rAxis", None)
+        trigger_axis = r_axis[1] if r_axis and len(r_axis) > 1 else None
+        trigger_pull = float(getattr(trigger_axis, "x", 0.0) or 0.0)
+        trigger_delta = float(getattr(trigger_axis, "y", 0.0) or 0.0)
+
+        trigger_button = int(getattr(openvr, "k_EButton_SteamVR_Trigger", 33))
+        trigger_mask = 1 << trigger_button
+        pressed_mask = int(getattr(state, "ulButtonPressed", 0) or 0)
+        touched_mask = int(getattr(state, "ulButtonTouched", 0) or 0)
+
+        return {
+            "trigger_pull": trigger_pull,
+            "trigger_delta": trigger_delta,
+            "trigger_touch": 1.0 if (touched_mask & trigger_mask) else 0.0,
+            "trigger_click": 1.0 if (pressed_mask & trigger_mask) else 0.0,
+        }
 
     def _calc_finger_curl(bone_transforms, chain: tuple[int, ...]) -> float:
         if len(chain) < 2:
@@ -459,6 +523,8 @@ def _get_input(ovr_context: OVRContext) -> dict[str, dict[str, float]] | None:
         previous_left = latest_input_state["left"].copy()
         previous_right = latest_input_state["right"].copy()
 
+    right_trigger_values = _get_right_trigger_values()
+
     left_data = {
         "thumb_curl": float((l_skeletal or {}).get("thumb", previous_left["thumb_curl"])),
         "index_curl": float((l_skeletal or {}).get("index", previous_left["index_curl"])),
@@ -480,7 +546,7 @@ def _get_input(ovr_context: OVRContext) -> dict[str, dict[str, float]] | None:
         "middle_curl": float((r_skeletal or {}).get("middle", previous_right["middle_curl"])),
         "ring_curl": float((r_skeletal or {}).get("ring", previous_right["ring_curl"])),
         "pinky_curl": float((r_skeletal or {}).get("pinky", previous_right["pinky_curl"])),
-        "trigger_click": _get_digital_action("r_trigger_click", "right") if updated else previous_right["trigger_click"],
+        "trigger_click": right_trigger_values["trigger_click"],
         "interact_ui": _get_digital_action("interact_ui", "right") if updated else previous_right["interact_ui"],
         "teleport": _get_digital_action("teleport", "right") if updated else previous_right["teleport"],
         "grab_pinch": _get_digital_action("grab_pinch", "right") if updated else previous_right["grab_pinch"],
@@ -488,6 +554,9 @@ def _get_input(ovr_context: OVRContext) -> dict[str, dict[str, float]] | None:
         "squeeze": _get_analog_action("squeeze", "right") if updated else previous_right["squeeze"],
         "snap_turn_left": _get_digital_action("snap_turn_left", "right") if updated else previous_right["snap_turn_left"],
         "snap_turn_right": _get_digital_action("snap_turn_right", "right") if updated else previous_right["snap_turn_right"],
+        "trigger_pull": right_trigger_values["trigger_pull"],
+        "trigger_delta": right_trigger_values["trigger_delta"],
+        "trigger_touch": right_trigger_values["trigger_touch"],
     }
 
     return {"left": left_data, "right": right_data}
@@ -779,6 +848,9 @@ def _insert_action(ovr_context: OVRContext):
             "left_snap_turn_left": [],
             "left_snap_turn_right": [],
             "right_trigger_click": [],
+            "right_trigger_pull": [],
+            "right_trigger_delta": [],
+            "right_trigger_touch": [],
             "right_interact_ui": [],
             "right_teleport": [],
             "right_grab_pinch": [],
@@ -815,6 +887,9 @@ def _insert_action(ovr_context: OVRContext):
             input_channels["left_snap_turn_left"].append(left_values.get("snap_turn_left", 0.0))
             input_channels["left_snap_turn_right"].append(left_values.get("snap_turn_right", 0.0))
             input_channels["right_trigger_click"].append(right_values.get("trigger_click", 0.0))
+            input_channels["right_trigger_pull"].append(right_values.get("trigger_pull", 0.0))
+            input_channels["right_trigger_delta"].append(right_values.get("trigger_delta", 0.0))
+            input_channels["right_trigger_touch"].append(right_values.get("trigger_touch", 0.0))
             input_channels["right_interact_ui"].append(right_values.get("interact_ui", 0.0))
             input_channels["right_teleport"].append(right_values.get("teleport", 0.0))
             input_channels["right_grab_pinch"].append(right_values.get("grab_pinch", 0.0))
