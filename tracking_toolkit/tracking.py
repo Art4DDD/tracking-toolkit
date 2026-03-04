@@ -183,26 +183,44 @@ def _log_controller_button_presses(ovr_context: OVRContext):
 
     def _read_state(index: int):
         state = None
+
+        state_size = 0
+        try:
+            state_size = int(ctypes.sizeof(openvr.VRControllerState_t))
+        except Exception:
+            state_size = 0
+
+        # Match OpenVR C++ signature as closely as possible:
+        # GetControllerState(index, &state, sizeof(state)) -> bool
         calls = [
             lambda: get_state_fn(index),
             lambda: get_state_fn(index, openvr.VRControllerState_t()),
+            lambda: get_state_fn(index, openvr.VRControllerState_t(), state_size) if state_size else None,
+            lambda: get_state_fn(index, state_size) if state_size else None,
         ]
+
         for call in calls:
             try:
                 result = call()
             except Exception:
                 continue
 
+            if result is None:
+                continue
+
             if isinstance(result, tuple):
+                ok = bool(result[0]) if result else False
                 if len(result) >= 2:
                     state = result[1]
                 elif len(result) == 1:
                     state = result[0]
+                if (state is not None) and (ok or len(result) >= 2):
+                    return state
             else:
-                state = result
+                # Some bindings may return just state object or bool.
+                if hasattr(result, "ulButtonPressed"):
+                    return result
 
-            if state:
-                break
         return state
 
     seen_indexes = set()
@@ -227,6 +245,8 @@ def _log_controller_button_presses(ovr_context: OVRContext):
             pressed = int(getattr(state, "ulButtonPressed", 0))
             touched = int(getattr(state, "ulButtonTouched", 0))
             prev_pressed = int(last_controller_button_masks.get(idx, -1))
+            last_controller_button_masks[f"role_{side}"] = pressed
+
             if pressed != prev_pressed:
                 print(
                     f"[OpenVR] Controller role={side} idx={idx} "
@@ -256,8 +276,13 @@ def _log_controller_button_presses(ovr_context: OVRContext):
             )
             last_controller_button_masks[tracker.index] = pressed
 
-    if button_log_poll_count % 300 == 0:
-        print(f"[OpenVR] Controller button polling heartbeat: tracked_masks={len(last_controller_button_masks)}")
+    if button_log_poll_count % 120 == 0:
+        left_mask = last_controller_button_masks.get("role_left", 0)
+        right_mask = last_controller_button_masks.get("role_right", 0)
+        print(
+            "[OpenVR] Controller button polling heartbeat: "
+            f"left_mask=0x{int(left_mask):016X} right_mask=0x{int(right_mask):016X} tracked_masks={len(last_controller_button_masks)}"
+        )
 
 
 def _get_input(ovr_context: OVRContext) -> dict[str, dict[str, float]] | None:
