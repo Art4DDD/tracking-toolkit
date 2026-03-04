@@ -42,6 +42,49 @@ FINGER_BONE_CHAINS = {
 
 
 
+
+
+def _openvr_button_name_map() -> dict[int, str]:
+    mapping: dict[int, str] = {}
+    for attr in dir(openvr):
+        if not attr.startswith("k_EButton_"):
+            continue
+        try:
+            value = int(getattr(openvr, attr))
+        except Exception:
+            continue
+        mapping[value] = attr.replace("k_EButton_", "")
+    return mapping
+
+
+OPENVR_BUTTON_NAMES = _openvr_button_name_map()
+
+
+def _decode_button_mask(mask: int) -> list[str]:
+    names: list[str] = []
+    for bit in range(64):
+        if not (mask & (1 << bit)):
+            continue
+        names.append(OPENVR_BUTTON_NAMES.get(bit, f"Unknown({bit})"))
+    return names
+
+
+def _controller_axes_snapshot(state) -> list[tuple[int, float, float]]:
+    axes = getattr(state, "rAxis", None)
+    if not axes:
+        return []
+
+    values: list[tuple[int, float, float]] = []
+    for axis_idx in range(5):
+        try:
+            axis = axes[axis_idx]
+        except Exception:
+            continue
+        x = float(getattr(axis, "x", 0.0))
+        y = float(getattr(axis, "y", 0.0))
+        values.append((axis_idx, x, y))
+    return values
+
 def _ensure_finger_properties(target_obj: bpy.types.Object):
     for channel in FINGER_CHANNELS:
         if channel not in target_obj:
@@ -248,9 +291,14 @@ def _log_controller_button_presses(ovr_context: OVRContext):
             last_controller_button_masks[f"role_{side}"] = pressed
 
             if pressed != prev_pressed:
+                pressed_names = ", ".join(_decode_button_mask(pressed)) or "none"
+                touched_names = ", ".join(_decode_button_mask(touched)) or "none"
+                axis_dump = "; ".join(f"axis{a}=({x:.3f},{y:.3f})" for a, x, y in _controller_axes_snapshot(state)) or "no_axes"
                 print(
                     f"[OpenVR] Controller role={side} idx={idx} "
-                    f"ulButtonPressed=0x{pressed:016X} ulButtonTouched=0x{touched:016X}"
+                    f"ulButtonPressed=0x{pressed:016X} [{pressed_names}] "
+                    f"ulButtonTouched=0x{touched:016X} [{touched_names}] "
+                    f"{axis_dump}"
                 )
                 last_controller_button_masks[idx] = pressed
 
@@ -270,18 +318,27 @@ def _log_controller_button_presses(ovr_context: OVRContext):
         prev_pressed = int(last_controller_button_masks.get(tracker.index, -1))
 
         if pressed != prev_pressed:
+            pressed_names = ", ".join(_decode_button_mask(pressed)) or "none"
+            touched_names = ", ".join(_decode_button_mask(touched)) or "none"
+            axis_dump = "; ".join(f"axis{a}=({x:.3f},{y:.3f})" for a, x, y in _controller_axes_snapshot(state)) or "no_axes"
             print(
                 f"[OpenVR] Controller {tracker.name} idx={tracker.index} "
-                f"ulButtonPressed=0x{pressed:016X} ulButtonTouched=0x{touched:016X}"
+                f"ulButtonPressed=0x{pressed:016X} [{pressed_names}] "
+                f"ulButtonTouched=0x{touched:016X} [{touched_names}] "
+                f"{axis_dump}"
             )
             last_controller_button_masks[tracker.index] = pressed
 
     if button_log_poll_count % 120 == 0:
         left_mask = last_controller_button_masks.get("role_left", 0)
         right_mask = last_controller_button_masks.get("role_right", 0)
+        left_names = ", ".join(_decode_button_mask(int(left_mask))) or "none"
+        right_names = ", ".join(_decode_button_mask(int(right_mask))) or "none"
         print(
             "[OpenVR] Controller button polling heartbeat: "
-            f"left_mask=0x{int(left_mask):016X} right_mask=0x{int(right_mask):016X} tracked_masks={len(last_controller_button_masks)}"
+            f"left_mask=0x{int(left_mask):016X} [{left_names}] "
+            f"right_mask=0x{int(right_mask):016X} [{right_names}] "
+            f"tracked_masks={len(last_controller_button_masks)}"
         )
 
 
