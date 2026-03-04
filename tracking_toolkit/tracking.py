@@ -212,6 +212,7 @@ def init_handles():
         "headset_on_head": _get_action_handle("/actions/default/in/HeadsetOnHead"),
         "snap_turn_left": _get_action_handle("/actions/default/in/SnapTurnLeft"),
         "snap_turn_right": _get_action_handle("/actions/default/in/SnapTurnRight"),
+        "haptic": _get_action_handle("/actions/default/out/Haptic"),
     }
 
     global input_source_handles
@@ -296,6 +297,10 @@ def _log_openvr_action_api(vr_ipt):
     global action_debug_poll_count
     action_debug_poll_count += 1
 
+    # Keep periodic to avoid flooding Blender console too hard.
+    if action_debug_poll_count % 15 != 0:
+        return
+
     get_digital_fn = getattr(vr_ipt, "getDigitalActionData", None) or getattr(vr_ipt, "GetDigitalActionData", None)
     get_analog_fn = getattr(vr_ipt, "getAnalogActionData", None) or getattr(vr_ipt, "GetAnalogActionData", None)
     get_pose_fn = getattr(vr_ipt, "getPoseActionDataRelativeToNow", None) or getattr(vr_ipt, "GetPoseActionDataRelativeToNow", None)
@@ -306,104 +311,161 @@ def _log_openvr_action_api(vr_ipt):
     left_src = int(input_source_handles.get("left", 0) or 0)
     right_src = int(input_source_handles.get("right", 0) or 0)
 
-    def _call(fn, variants):
+    action_meta = [
+        ("interact_ui", "/actions/default/in/InteractUI", right_src),
+        ("teleport", "/actions/default/in/Teleport", right_src),
+        ("grab_pinch", "/actions/default/in/GrabPinch", left_src),
+        ("grab_grip", "/actions/default/in/GrabGrip", left_src),
+        ("squeeze", "/actions/default/in/Squeeze", right_src),
+        ("headset_on_head", "/actions/default/in/HeadsetOnHead", 0),
+        ("snap_turn_left", "/actions/default/in/SnapTurnLeft", left_src),
+        ("snap_turn_right", "/actions/default/in/SnapTurnRight", right_src),
+        ("l_trigger_click", "/actions/default/in/TriggerClickLeft", left_src),
+        ("r_trigger_click", "/actions/default/in/TriggerClickRight", right_src),
+        ("pose", "/actions/default/in/Pose", right_src),
+        ("l_skeleton", "/actions/default/in/SkeletonLeftHand", left_src),
+        ("r_skeleton", "/actions/default/in/SkeletonRightHand", right_src),
+        ("haptic", "/actions/default/out/Haptic", right_src),
+    ]
+
+    def _fmt_params(fields: dict) -> str:
+        if not fields:
+            return "none=none"
+        return " ".join(f"{k}={v}" for k, v in fields.items())
+
+    def _normalize_result(result):
+        data = _pick_data_obj(result)
+        return data
+
+    def _attempt(getter_name: str, fn, calls, field_names):
         if not fn:
-            return None
-        for call in variants:
+            return {"status": "unavailable", "getter": getter_name}
+
+        last_err = None
+        for c in calls:
             try:
-                result = call()
-            except Exception:
+                result = c()
+            except Exception as e:
+                last_err = e
                 continue
-            if result is not None:
-                return result
-        return None
+            data = _normalize_result(result)
+            fields = _compact_fields(data, field_names)
+            fields["status"] = "ok"
+            fields["getter"] = getter_name
+            return fields
 
-    digital_targets = [
-        ("l_trigger_click", left_src),
-        ("r_trigger_click", right_src),
-        ("interact_ui", right_src),
-        ("teleport", right_src),
-        ("grab_pinch", left_src),
-        ("grab_grip", left_src),
-        ("headset_on_head", 0),
-        ("snap_turn_left", left_src),
-        ("snap_turn_right", right_src),
-    ]
+        return {
+            "status": "error",
+            "getter": getter_name,
+            "error": str(last_err) if last_err else "no_result",
+        }
 
-    analog_targets = [
-        ("squeeze", left_src),
-        ("squeeze", right_src),
-    ]
+    print("[OpenVR] ===== Action API full dump =====")
+    print(f"[OpenVR] poll={action_debug_poll_count} left_src={left_src} right_src={right_src}")
 
-    if action_debug_poll_count % 60 != 0:
-        return
+    tracking_universe = getattr(openvr, "TrackingUniverseStanding", 1)
+    skel_space = getattr(openvr, "VRSkeletalTransformSpace_Model", 0)
+    skel_motion = getattr(openvr, "VRSkeletalMotionRange_WithController", 0)
+    skel_summary_type = getattr(openvr, "VRSummaryType_FromDevice", 1)
 
-    print("[OpenVR] ===== Action API dump =====")
-
-    for key, src in digital_targets:
+    for key, path, src in action_meta:
         handle = action_handles.get(key)
         if not handle:
-            continue
-        result = _call(get_digital_fn, [
-            lambda: get_digital_fn(handle),
-            lambda: get_digital_fn(handle, openvr.k_ulInvalidInputValueHandle),
-            lambda: get_digital_fn(handle, src) if src else None,
-        ])
-        data = _pick_data_obj(result)
-        fields = _compact_fields(data, ("bActive", "bState", "bChanged", "activeOrigin"))
-        print(f"[OpenVR][GetDigitalActionData] action={key} src={src} data={fields}")
-
-    for key, src in analog_targets:
-        handle = action_handles.get(key)
-        if not handle:
-            continue
-        result = _call(get_analog_fn, [
-            lambda: get_analog_fn(handle),
-            lambda: get_analog_fn(handle, openvr.k_ulInvalidInputValueHandle),
-            lambda: get_analog_fn(handle, src) if src else None,
-        ])
-        data = _pick_data_obj(result)
-        fields = _compact_fields(data, ("bActive", "x", "y", "z", "deltaX", "deltaY", "deltaZ", "activeOrigin"))
-        print(f"[OpenVR][GetAnalogActionData] action={key} src={src} data={fields}")
-
-    pose_handle = action_handles.get("pose")
-    if pose_handle:
-        tracking_universe = getattr(openvr, "TrackingUniverseStanding", 1)
-        result = _call(get_pose_fn, [
-            lambda: get_pose_fn(pose_handle, tracking_universe, 0.0),
-            lambda: get_pose_fn(pose_handle, tracking_universe, 0.0, openvr.k_ulInvalidInputValueHandle),
-            lambda: get_pose_fn(pose_handle, tracking_universe, 0.0, right_src) if right_src else None,
-        ])
-        data = _pick_data_obj(result)
-        fields = _compact_fields(data, ("bActive", "activeOrigin", "bPoseIsValid", "bDeviceIsConnected"))
-        print(f"[OpenVR][GetPoseActionDataRelativeToNow] action=pose data={fields}")
-
-    for key in ("l_skeleton", "r_skeleton"):
-        handle = action_handles.get(key)
-        if not handle:
+            print(f"[OpenVR][Action] path={path} handle=0 status=missing_handle")
             continue
 
-        skel_action = _call(get_skel_action_fn, [
-            lambda: get_skel_action_fn(handle),
-            lambda: get_skel_action_fn(handle, openvr.k_ulInvalidInputValueHandle),
-        ])
-        skel_action_data = _pick_data_obj(skel_action)
-        print(f"[OpenVR][GetSkeletalActionData] action={key} data={_compact_fields(skel_action_data, ('bActive','activeOrigin'))}")
+        base = {
+            "path": path,
+            "handle": int(handle),
+            "src": int(src),
+        }
 
-        summary = _call(get_skel_summary_fn, [
-            lambda: get_skel_summary_fn(handle),
-            lambda: get_skel_summary_fn(handle, getattr(openvr, 'VRSummaryType_FromDevice', 1)),
-        ])
-        summary_data = _pick_data_obj(summary)
-        print(f"[OpenVR][GetSkeletalSummaryData] action={key} data={_compact_fields(summary_data, ('flFingerCurl0','flFingerCurl1','flFingerCurl2','flFingerCurl3','flFingerCurl4'))}")
+        digital_fields = _attempt(
+            "GetDigitalActionData",
+            get_digital_fn,
+            [
+                lambda: get_digital_fn(handle),
+                lambda: get_digital_fn(handle, openvr.k_ulInvalidInputValueHandle),
+                lambda: get_digital_fn(handle, src) if src else None,
+            ],
+            ("bActive", "bState", "bChanged", "activeOrigin"),
+        )
+        print(f"[OpenVR][Action][Digital] {_fmt_params(base | digital_fields)}")
 
-        bone = _call(get_skel_bone_fn, [
-            lambda: get_skel_bone_fn(handle, getattr(openvr, 'VRSkeletalTransformSpace_Model', 0), getattr(openvr, 'VRSkeletalMotionRange_WithController', 0)),
-            lambda: get_skel_bone_fn(handle, getattr(openvr, 'VRSkeletalTransformSpace_Model', 0), getattr(openvr, 'VRSkeletalMotionRange_WithController', 0), 31),
-        ])
-        bone_data = _pick_data_obj(bone)
-        bone_count = len(bone_data) if hasattr(bone_data, '__len__') else 0
-        print(f"[OpenVR][GetSkeletalBoneData] action={key} bone_count={bone_count}")
+        analog_fields = _attempt(
+            "GetAnalogActionData",
+            get_analog_fn,
+            [
+                lambda: get_analog_fn(handle),
+                lambda: get_analog_fn(handle, openvr.k_ulInvalidInputValueHandle),
+                lambda: get_analog_fn(handle, src) if src else None,
+            ],
+            ("bActive", "x", "y", "z", "deltaX", "deltaY", "deltaZ", "activeOrigin"),
+        )
+        print(f"[OpenVR][Action][Analog] {_fmt_params(base | analog_fields)}")
+
+        pose_fields = _attempt(
+            "GetPoseActionDataRelativeToNow",
+            get_pose_fn,
+            [
+                lambda: get_pose_fn(handle, tracking_universe, 0.0),
+                lambda: get_pose_fn(handle, tracking_universe, 0.0, openvr.k_ulInvalidInputValueHandle),
+                lambda: get_pose_fn(handle, tracking_universe, 0.0, src) if src else None,
+            ],
+            ("bActive", "activeOrigin", "bPoseIsValid", "bDeviceIsConnected"),
+        )
+        print(f"[OpenVR][Action][Pose] {_fmt_params(base | pose_fields)}")
+
+        skel_action_fields = _attempt(
+            "GetSkeletalActionData",
+            get_skel_action_fn,
+            [
+                lambda: get_skel_action_fn(handle),
+                lambda: get_skel_action_fn(handle, openvr.k_ulInvalidInputValueHandle),
+                lambda: get_skel_action_fn(handle, src) if src else None,
+            ],
+            ("bActive", "activeOrigin"),
+        )
+        print(f"[OpenVR][Action][SkeletalAction] {_fmt_params(base | skel_action_fields)}")
+
+        skel_summary_fields = _attempt(
+            "GetSkeletalSummaryData",
+            get_skel_summary_fn,
+            [
+                lambda: get_skel_summary_fn(handle),
+                lambda: get_skel_summary_fn(handle, skel_summary_type),
+            ],
+            ("flFingerCurl0", "flFingerCurl1", "flFingerCurl2", "flFingerCurl3", "flFingerCurl4"),
+        )
+        print(f"[OpenVR][Action][SkeletalSummary] {_fmt_params(base | skel_summary_fields)}")
+
+        bone_fields = _attempt(
+            "GetSkeletalBoneData",
+            get_skel_bone_fn,
+            [
+                lambda: get_skel_bone_fn(handle, skel_space, skel_motion),
+                lambda: get_skel_bone_fn(handle, skel_space, skel_motion, 31),
+            ],
+            tuple(),
+        )
+
+        if bone_fields.get("status") == "ok":
+            bone_probe = None
+            for call in (
+                lambda: get_skel_bone_fn(handle, skel_space, skel_motion) if get_skel_bone_fn else None,
+                lambda: get_skel_bone_fn(handle, skel_space, skel_motion, 31) if get_skel_bone_fn else None,
+            ):
+                try:
+                    bone_probe = call()
+                except Exception:
+                    continue
+                if bone_probe is not None:
+                    break
+            bone_data = _normalize_result(bone_probe)
+            bone_count = len(bone_data) if hasattr(bone_data, "__len__") else 0
+            bone_fields["bone_count"] = bone_count
+
+        print(f"[OpenVR][Action][SkeletalBone] {_fmt_params(base | bone_fields)}")
 def _get_input(ovr_context: OVRContext) -> dict[str, dict[str, float]] | None:
     vr_ipt = openvr.VRInput()
 
