@@ -85,22 +85,43 @@ def _get_or_create_root_object() -> bpy.types.Object:
 def init_handles():
     vr_ipt = openvr.VRInput()
 
+    def _unwrap_handle(value):
+        if isinstance(value, tuple):
+            if not value:
+                return None
+            for candidate in reversed(value):
+                if isinstance(candidate, int):
+                    return candidate
+            return None
+        return value
+
     def _get_action_set_handle(action_set_path: str):
+        get_set_fn = getattr(vr_ipt, "getActionSetHandle", None) or getattr(vr_ipt, "GetActionSetHandle", None)
+        if not get_set_fn:
+            return None
         try:
-            return vr_ipt.getActionSetHandle(action_set_path)
+            return _unwrap_handle(get_set_fn(action_set_path))
         except Exception:
             return None
 
     def _get_action_handle(action_path: str):
-        try:
-            return vr_ipt.getActionHandle(action_path)
-        except Exception:
+        get_action_fn = getattr(vr_ipt, "getActionHandle", None) or getattr(vr_ipt, "GetActionHandle", None)
+        if not get_action_fn:
             return None
+        variants = [action_path, action_path.lower()]
+        for variant in variants:
+            try:
+                handle = _unwrap_handle(get_action_fn(variant))
+            except Exception:
+                continue
+            if handle:
+                return handle
+        return None
 
     global action_sets
     action_set_handle = _get_action_set_handle("/actions/default")
     action_sets = (openvr.VRActiveActionSet_t * 1)()
-    action_sets[0].ulActionSet = action_set_handle or 0
+    action_sets[0].ulActionSet = int(action_set_handle or 0)
 
     global action_handles
     action_handles = {
@@ -111,7 +132,8 @@ def init_handles():
         "interact_ui": _get_action_handle("/actions/default/in/InteractUI"),
     }
 
-    print("Initialized OpenVR skeletal action handles")
+    print(f"[OpenVR] Action set '/actions/default' handle: {action_sets[0].ulActionSet}")
+    print(f"[OpenVR] Trigger handles: left={action_handles.get('l_trigger_click')} right={action_handles.get('r_trigger_click')} interact_ui={action_handles.get('interact_ui')}")
 
 
 def _handle_input(ovr_context: OVRContext, input_state: dict[str, dict[str, float]]):
@@ -156,7 +178,7 @@ def _handle_input(ovr_context: OVRContext, input_state: dict[str, dict[str, floa
 def _controller_trigger_values(vr_ipt, ovr_context: OVRContext) -> tuple[float, float]:
     def _digital_state(action_key: str) -> tuple[bool, bool]:
         action = action_handles.get(action_key)
-        if action is None:
+        if action is None or int(action) == 0:
             return False, False
 
         get_digital_fn = getattr(vr_ipt, "getDigitalActionData", None) or getattr(vr_ipt, "GetDigitalActionData", None)
@@ -182,6 +204,9 @@ def _controller_trigger_values(vr_ipt, ovr_context: OVRContext) -> tuple[float, 
 
             active = _safe_getattr_bool(digital_data, "bActive", True)
             state = _safe_getattr_bool(digital_data, "bState", False)
+            changed = _safe_getattr_bool(digital_data, "bChanged", False)
+            if active and changed and state:
+                print(f"[OpenVR] Trigger click fired: {action_key}")
             return active, state
 
         return False, False
@@ -199,12 +224,7 @@ def _controller_trigger_values(vr_ipt, ovr_context: OVRContext) -> tuple[float, 
         "right": bool(right_active and right_pressed),
         "interact_ui": bool(interact_active and interact_pressed),
     }
-
-    for key, is_pressed in current_states.items():
-        was_pressed = trigger_click_state.get(key, False)
-        if is_pressed and not was_pressed:
-            print(f"[OpenVR] Trigger click fired: {key}")
-        trigger_click_state[key] = is_pressed
+    trigger_click_state.update(current_states)
 
     if not (left_active or right_active):
         try:
