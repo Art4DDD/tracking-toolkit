@@ -3,6 +3,7 @@ import openvr
 from mathutils import Matrix, Vector
 from pathlib import Path
 
+
 from .properties import Preferences, OVRContext, OVRTracker
 from .tracking import _get_poses, load_trackers, start_recording, stop_recording, start_preview, stop_preview, init_handles
 from .. import __package__ as base_package
@@ -16,6 +17,42 @@ TRACKER_BOX_EDGES = [
     (4, 5), (5, 6), (6, 7), (7, 4),
     (0, 4), (1, 5), (2, 6), (3, 7),
 ]
+
+
+class ConvertSubframesOperator(bpy.types.Operator):
+    bl_idname = "id.convert_subframes_to_frames"
+    bl_label = "Convert subframes to frames"
+    bl_description = "Round keyframes and handles to whole frames"
+    bl_options = {"UNDO"}
+
+    def execute(self, context):
+        ovr_context: OVRContext = context.scene.OVRContext
+
+        target_names = {"OVR Root"}
+        for tracker in ovr_context.trackers:
+            target_names.add(tracker.name)
+            if tracker.target.object:
+                target_names.add(tracker.target.object.name)
+
+        actions = set()
+        for obj_name in target_names:
+            obj = bpy.data.objects.get(obj_name)
+            if obj and obj.animation_data and obj.animation_data.action:
+                actions.add(obj.animation_data.action)
+
+        key_count = 0
+        for action in actions:
+            for fcurve in action.fcurves:
+                for key in fcurve.keyframe_points:
+                    rounded_frame = round(float(key.co.x))
+                    key.co.x = rounded_frame
+                    key.handle_left.x = rounded_frame
+                    key.handle_right.x = rounded_frame
+                    key_count += 1
+                fcurve.update()
+
+        self.report({"INFO"}, f"Converted {key_count} keyframes to integer frames")
+        return {"FINISHED"}
 
 
 class ToggleRecordOperator(bpy.types.Operator):

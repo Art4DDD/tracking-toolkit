@@ -5,6 +5,7 @@ from .operators import (
     ToggleActiveOperator,
     CreateRefsOperator,
     ToggleRecordOperator,
+    ConvertSubframesOperator,
 )
 from .properties import OVRContext
 
@@ -78,6 +79,8 @@ class RecorderPanel(View3DPanel, bpy.types.Panel):
             icon=active_record_icon,
             depress=True,
         )
+
+        layout.operator(ConvertSubframesOperator.bl_idname, text="Convert Subframes to Frames", icon="KEYTYPE_KEYFRAME_VEC")
 
         layout.label(text="Skeletal Fingers")
 
