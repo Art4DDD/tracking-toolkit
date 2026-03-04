@@ -61,9 +61,15 @@ def selected_tracker_change_callback(self: "OVRContext", context):
     if not obj:
         return
 
-    bpy.ops.object.select_all(action="DESELECT")
+    view_layer = getattr(context, "view_layer", None)
+    if not view_layer:
+        return
+
+    for scene_obj in context.scene.objects:
+        scene_obj.select_set(False)
+
     obj.select_set(True)
-    context.view_layer.objects.active = obj
+    view_layer.objects.active = obj
 
 
 class OVRContext(bpy.types.PropertyGroup):

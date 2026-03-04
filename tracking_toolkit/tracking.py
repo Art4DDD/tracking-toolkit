@@ -35,6 +35,7 @@ latest_input_state = {
 }
 
 trigger_toggle_latched = False
+trigger_debug_last_state = {"left": False, "right": False, "both": False}
 
 FINGER_BONE_CHAINS = {
     "thumb": (2, 3, 4, 5),
@@ -113,6 +114,10 @@ def init_handles():
         "r_trigger_click": _get_action_handle("/actions/default/in/TriggerClickRight"),
     }
 
+    missing = [name for name, handle in action_handles.items() if handle is None]
+    if missing:
+        print(f"[OpenVR] Missing action handles: {missing}")
+
     print("Initialized OpenVR skeletal action handles")
 
 
@@ -156,14 +161,16 @@ def _handle_input(ovr_context: OVRContext, input_state: dict[str, dict[str, floa
 
 
 def _controller_trigger_values(vr_ipt) -> tuple[float, float]:
-    def _digital_value(action_key: str) -> float:
+    global trigger_debug_last_state
+
+    def _digital_state(action_key: str) -> tuple[bool, bool]:
         action = action_handles.get(action_key)
         if action is None:
-            return 0.0
+            return False, False
 
         get_digital_fn = getattr(vr_ipt, "getDigitalActionData", None) or getattr(vr_ipt, "GetDigitalActionData", None)
         if not get_digital_fn:
-            return 0.0
+            return False, False
 
         variants = [
             lambda: get_digital_fn(action),
@@ -184,12 +191,27 @@ def _controller_trigger_values(vr_ipt) -> tuple[float, float]:
 
             active = _safe_getattr_bool(digital_data, "bActive", True)
             state = _safe_getattr_bool(digital_data, "bState", False)
-            if active and state:
-                return 1.0
+            if active:
+                return active, state
 
-        return 0.0
+        return False, False
 
-    return _digital_value("l_trigger_click"), _digital_value("r_trigger_click")
+    left_active, left_pressed = _digital_state("l_trigger_click")
+    right_active, right_pressed = _digital_state("r_trigger_click")
+
+    current = {
+        "left": left_pressed,
+        "right": right_pressed,
+        "both": left_pressed and right_pressed,
+    }
+    if current != trigger_debug_last_state:
+        print(
+            f"[OpenVR Trigger] left={'A' if left_active else '-'}:{'P' if left_pressed else '-'} "
+            f"right={'A' if right_active else '-'}:{'P' if right_pressed else '-'} both={current['both']}"
+        )
+        trigger_debug_last_state = current
+
+    return float(left_pressed), float(right_pressed)
 
 
 def _get_input(ovr_context: OVRContext) -> dict[str, dict[str, float]] | None:
@@ -484,7 +506,11 @@ def _pose_vis_timer():
     global trigger_toggle_latched
 
     _apply_poses()
-    ovr_context = getattr(bpy.context.scene, "OVRContext", None)
+    scene = getattr(bpy.context, "scene", None)
+    if scene is None:
+        return 1.0 / 60
+
+    ovr_context = getattr(scene, "OVRContext", None)
     if ovr_context:
         with buffer_lock:
             input_state = {
@@ -500,8 +526,9 @@ def _pose_vis_timer():
 
         if both_triggers_pressed and not trigger_toggle_latched:
             ovr_context.recording = not ovr_context.recording
+            print(f"[OpenVR Trigger] Dual click detected, recording -> {ovr_context.recording}")
             if ovr_context.recording:
-                ovr_context.record_start_frame = bpy.context.scene.frame_current
+                ovr_context.record_start_frame = scene.frame_current
                 start_recording()
             else:
                 stop_recording(ovr_context)
