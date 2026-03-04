@@ -70,6 +70,7 @@ class RecorderPanel(View3DPanel, bpy.types.Panel):
             active_record_label = "Stop Recording" if ovr_context.recording else "Start Recording"
             active_record_icon = "RECORD_ON" if ovr_context.recording else "RECORD_OFF"
 
+            # noinspection PyTypeChecker
             record_btn_row.operator(
                 ToggleRecordOperator.bl_idname,
                 text=active_record_label,
@@ -81,12 +82,19 @@ class RecorderPanel(View3DPanel, bpy.types.Panel):
         if not show_tools:
             return
         if ovr_context.recordings_made:
-            convert_row = layout.row()
-            convert_row.scale_y = 2
-            convert_row.operator(
+            convert_box = layout.box()
+            convert_col = convert_box.column(align=True)
+            convert_col.scale_y = 1.0
+            convert_col.operator(
                 ConvertSubframesOperator.bl_idname,
-                text="Convert Subframes To Frames",
+                text="Convert",
                 icon="KEYTYPE_KEYFRAME_VEC",
+                emboss=False,
+            )
+            convert_col.operator(
+                ConvertSubframesOperator.bl_idname,
+                text="Subframes To Frames",
+                emboss=False,
             )
 Subframes To Frames", icon="KEYTYPE_KEYFRAME_VEC")
 
