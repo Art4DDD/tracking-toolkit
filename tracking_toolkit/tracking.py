@@ -25,9 +25,7 @@ recording_active = False
 action_sets = []
 action_handles = {}
 input_source_handles = {"left": 0, "right": 0}
-last_controller_button_masks = {}
-last_action_button_states = {}
-button_log_poll_count = 0
+action_debug_poll_count = 0
 FINGER_CHANNELS = ("thumb_curl", "index_curl", "middle_curl", "ring_curl", "pinky_curl")
 latest_input_state = {
     "left": {channel: 0.0 for channel in FINGER_CHANNELS},
@@ -206,6 +204,14 @@ def init_handles():
         "l_trigger_click": _get_action_handle("/actions/default/in/TriggerClickLeft"),
         "r_trigger_click": _get_action_handle("/actions/default/in/TriggerClickRight"),
         "interact_ui": _get_action_handle("/actions/default/in/InteractUI"),
+        "teleport": _get_action_handle("/actions/default/in/Teleport"),
+        "grab_pinch": _get_action_handle("/actions/default/in/GrabPinch"),
+        "grab_grip": _get_action_handle("/actions/default/in/GrabGrip"),
+        "pose": _get_action_handle("/actions/default/in/Pose"),
+        "squeeze": _get_action_handle("/actions/default/in/Squeeze"),
+        "headset_on_head": _get_action_handle("/actions/default/in/HeadsetOnHead"),
+        "snap_turn_left": _get_action_handle("/actions/default/in/SnapTurnLeft"),
+        "snap_turn_right": _get_action_handle("/actions/default/in/SnapTurnRight"),
     }
 
     global input_source_handles
@@ -216,6 +222,7 @@ def init_handles():
 
     print(f"[OpenVR] Action set '/actions/default' handle: {action_sets[0].ulActionSet}")
     print(f"[OpenVR] Input source handles: left={input_source_handles.get('left')} right={input_source_handles.get('right')}")
+    print(f"[OpenVR] Action handles: {action_handles}")
 
 
 def _handle_input(ovr_context: OVRContext, input_state: dict[str, dict[str, float]]):
@@ -257,230 +264,146 @@ def _handle_input(ovr_context: OVRContext, input_state: dict[str, dict[str, floa
         root_obj[channel] = value
 
 
-def _log_controller_button_presses(ovr_context: OVRContext):
-    system = openvr.VRSystem()
-    get_state_fn = getattr(system, "getControllerState", None) or getattr(system, "GetControllerState", None)
-    get_idx_fn = getattr(system, "getTrackedDeviceIndexForControllerRole", None) or getattr(system, "GetTrackedDeviceIndexForControllerRole", None)
-    if not get_state_fn:
-        print("[OpenVR] getControllerState is unavailable in this binding")
-        return
+def _pick_data_obj(result):
+    if isinstance(result, tuple):
+        for item in result:
+            if item is not None and not isinstance(item, bool):
+                return item
+        return result[0] if result else None
+    return result
 
-    global last_controller_button_masks, button_log_poll_count
-    button_log_poll_count += 1
 
-    def _read_state(index: int):
-        state = None
-
-        state_size = 0
+def _compact_fields(obj, names: tuple[str, ...]):
+    out = {}
+    if obj is None:
+        return out
+    for name in names:
         try:
-            state_size = int(ctypes.sizeof(openvr.VRControllerState_t))
+            value = getattr(obj, name)
         except Exception:
-            state_size = 0
+            continue
+        try:
+            if isinstance(value, (int, float, bool, str)):
+                out[name] = value
+            else:
+                out[name] = str(value)
+        except Exception:
+            out[name] = "<unavailable>"
+    return out
 
-        # Match OpenVR C++ signature as closely as possible:
-        # GetControllerState(index, &state, sizeof(state)) -> bool
-        calls = [
-            lambda: get_state_fn(index),
-            lambda: get_state_fn(index, openvr.VRControllerState_t()),
-            lambda: get_state_fn(index, openvr.VRControllerState_t(), state_size) if state_size else None,
-            lambda: get_state_fn(index, state_size) if state_size else None,
-        ]
 
-        for call in calls:
+def _log_openvr_action_api(vr_ipt):
+    global action_debug_poll_count
+    action_debug_poll_count += 1
+
+    get_digital_fn = getattr(vr_ipt, "getDigitalActionData", None) or getattr(vr_ipt, "GetDigitalActionData", None)
+    get_analog_fn = getattr(vr_ipt, "getAnalogActionData", None) or getattr(vr_ipt, "GetAnalogActionData", None)
+    get_pose_fn = getattr(vr_ipt, "getPoseActionDataRelativeToNow", None) or getattr(vr_ipt, "GetPoseActionDataRelativeToNow", None)
+    get_skel_action_fn = getattr(vr_ipt, "getSkeletalActionData", None) or getattr(vr_ipt, "GetSkeletalActionData", None)
+    get_skel_bone_fn = getattr(vr_ipt, "getSkeletalBoneData", None) or getattr(vr_ipt, "GetSkeletalBoneData", None)
+    get_skel_summary_fn = getattr(vr_ipt, "getSkeletalSummaryData", None) or getattr(vr_ipt, "GetSkeletalSummaryData", None)
+
+    left_src = int(input_source_handles.get("left", 0) or 0)
+    right_src = int(input_source_handles.get("right", 0) or 0)
+
+    def _call(fn, variants):
+        if not fn:
+            return None
+        for call in variants:
             try:
                 result = call()
             except Exception:
                 continue
-
-            if result is None:
-                continue
-
-            if isinstance(result, tuple):
-                ok = bool(result[0]) if result else False
-                if len(result) >= 2:
-                    state = result[1]
-                elif len(result) == 1:
-                    state = result[0]
-                if (state is not None) and (ok or len(result) >= 2):
-                    return state
-            else:
-                # Some bindings may return just state object or bool.
-                if hasattr(result, "ulButtonPressed"):
-                    return result
-
-        return state
-
-    seen_indexes = set()
-
-    is_connected_fn = getattr(system, "isTrackedDeviceConnected", None) or getattr(system, "IsTrackedDeviceConnected", None)
-    get_class_fn = getattr(system, "getTrackedDeviceClass", None) or getattr(system, "GetTrackedDeviceClass", None)
-
-    # Preferred path: explicit left/right role indexes from OpenVR.
-    if get_idx_fn:
-        for side, role in (("left", getattr(openvr, "TrackedControllerRole_LeftHand", 1)), ("right", getattr(openvr, "TrackedControllerRole_RightHand", 2))):
-            try:
-                idx = int(get_idx_fn(role))
-            except Exception:
-                continue
-
-            invalid_idx = int(getattr(openvr, "k_unTrackedDeviceIndexInvalid", 0xFFFFFFFF))
-            if idx < 0 or idx == invalid_idx:
-                continue
-
-            seen_indexes.add(idx)
-            state = _read_state(idx)
-
-            connected = False
-            if is_connected_fn:
-                try:
-                    connected = bool(is_connected_fn(idx))
-                except Exception:
-                    connected = False
-
-            device_class = None
-            if get_class_fn:
-                try:
-                    device_class = int(get_class_fn(idx))
-                except Exception:
-                    device_class = None
-
-            if not state:
-                if button_log_poll_count % 120 == 0:
-                    print(f"[OpenVR] role={side} idx={idx} connected={connected} class={device_class} state=unavailable")
-                continue
-
-            pressed = int(getattr(state, "ulButtonPressed", 0))
-            touched = int(getattr(state, "ulButtonTouched", 0))
-            prev_pressed = int(last_controller_button_masks.get(idx, -1))
-            last_controller_button_masks[f"role_{side}"] = pressed
-
-            if button_log_poll_count % 120 == 0:
-                print(
-                    f"[OpenVR] role={side} idx={idx} connected={connected} class={device_class} "
-                    f"pressed={'yes' if pressed else 'no'} touched={'yes' if touched else 'no'} "
-                    f"ulButtonPressed=0x{pressed:016X}"
-                )
-
-            if pressed != prev_pressed:
-                pressed_names = ", ".join(_decode_button_mask(pressed)) or "none"
-                touched_names = ", ".join(_decode_button_mask(touched)) or "none"
-                axis_dump = "; ".join(f"axis{a}=({x:.3f},{y:.3f})" for a, x, y in _controller_axes_snapshot(state)) or "no_axes"
-                pressed_table = _button_state_table(pressed)
-                print(
-                    f"[OpenVR] Controller role={side} idx={idx} "
-                    f"ulButtonPressed=0x{pressed:016X} [{pressed_names}] "
-                    f"ulButtonTouched=0x{touched:016X} [{touched_names}] "
-                    f"buttons: {pressed_table} "
-                    f"{axis_dump}"
-                )
-                last_controller_button_masks[idx] = pressed
-
-    # Fallback: scan controller trackers list.
-    for tracker in ovr_context.trackers:
-        if tracker.type != str(openvr.TrackedDeviceClass_Controller):
-            continue
-        if tracker.index in seen_indexes:
-            continue
-
-        state = _read_state(tracker.index)
-        if not state:
-            if button_log_poll_count % 120 == 0:
-                print(f"[OpenVR] tracker={tracker.name} idx={tracker.index} state=unavailable")
-            continue
-
-        pressed = int(getattr(state, "ulButtonPressed", 0))
-        touched = int(getattr(state, "ulButtonTouched", 0))
-        prev_pressed = int(last_controller_button_masks.get(tracker.index, -1))
-
-        if button_log_poll_count % 120 == 0:
-            print(
-                f"[OpenVR] tracker={tracker.name} idx={tracker.index} "
-                f"pressed={'yes' if pressed else 'no'} touched={'yes' if touched else 'no'} "
-                f"ulButtonPressed=0x{pressed:016X}"
-            )
-
-        if pressed != prev_pressed:
-            pressed_names = ", ".join(_decode_button_mask(pressed)) or "none"
-            touched_names = ", ".join(_decode_button_mask(touched)) or "none"
-            axis_dump = "; ".join(f"axis{a}=({x:.3f},{y:.3f})" for a, x, y in _controller_axes_snapshot(state)) or "no_axes"
-            pressed_table = _button_state_table(pressed)
-            print(
-                f"[OpenVR] Controller {tracker.name} idx={tracker.index} "
-                f"ulButtonPressed=0x{pressed:016X} [{pressed_names}] "
-                f"ulButtonTouched=0x{touched:016X} [{touched_names}] "
-                f"buttons: {pressed_table} "
-                f"{axis_dump}"
-            )
-            last_controller_button_masks[tracker.index] = pressed
-
-    if button_log_poll_count % 120 == 0:
-        left_mask = last_controller_button_masks.get("role_left", 0)
-        right_mask = last_controller_button_masks.get("role_right", 0)
-        left_names = ", ".join(_decode_button_mask(int(left_mask))) or "none"
-        right_names = ", ".join(_decode_button_mask(int(right_mask))) or "none"
-        left_table = _button_state_table(int(left_mask))
-        right_table = _button_state_table(int(right_mask))
-        print(
-            "[OpenVR] Controller button polling heartbeat: "
-            f"left_mask=0x{int(left_mask):016X} [{left_names}] "
-            f"right_mask=0x{int(right_mask):016X} [{right_names}] "
-            f"left_buttons: {left_table} "
-            f"right_buttons: {right_table} "
-            f"tracked_masks={len(last_controller_button_masks)}"
-        )
-
-
-def _log_action_button_states(vr_ipt):
-    get_digital_fn = getattr(vr_ipt, "getDigitalActionData", None) or getattr(vr_ipt, "GetDigitalActionData", None)
-    if not get_digital_fn:
-        return
-
-    global last_action_button_states, button_log_poll_count
-
-    def _read(action_key: str, source: str):
-        handle = action_handles.get(action_key)
-        if not handle:
-            return None
-        src = int(input_source_handles.get(source, 0) or 0)
-        calls = [
-            lambda: get_digital_fn(handle),
-            lambda: get_digital_fn(handle, openvr.k_ulInvalidInputValueHandle),
-        ]
-        if src:
-            calls.append(lambda: get_digital_fn(handle, src))
-        for c in calls:
-            try:
-                data = c()
-            except Exception:
-                continue
-            if isinstance(data, tuple) and data:
-                data = data[0]
-            if not data:
-                continue
-            active = bool(getattr(data, "bActive", True))
-            state = bool(getattr(data, "bState", False))
-            changed = bool(getattr(data, "bChanged", False))
-            return active, state, changed
+            if result is not None:
+                return result
         return None
 
-    probes = [
-        ("l_trigger_click", "left"),
-        ("r_trigger_click", "right"),
-        ("interact_ui", "right"),
-        ("interact_ui", "left"),
+    digital_targets = [
+        ("l_trigger_click", left_src),
+        ("r_trigger_click", right_src),
+        ("interact_ui", right_src),
+        ("teleport", right_src),
+        ("grab_pinch", left_src),
+        ("grab_grip", left_src),
+        ("headset_on_head", 0),
+        ("snap_turn_left", left_src),
+        ("snap_turn_right", right_src),
     ]
-    for key, side in probes:
-        result = _read(key, side)
-        if result is None:
+
+    analog_targets = [
+        ("squeeze", left_src),
+        ("squeeze", right_src),
+    ]
+
+    if action_debug_poll_count % 60 != 0:
+        return
+
+    print("[OpenVR] ===== Action API dump =====")
+
+    for key, src in digital_targets:
+        handle = action_handles.get(key)
+        if not handle:
             continue
-        active, state, changed = result
-        state_key = f"{key}:{side}"
-        prev = last_action_button_states.get(state_key)
-        if changed or prev != state or (button_log_poll_count % 120 == 0):
-            print(f"[OpenVR][Action] {state_key} active={active} state={state} changed={changed}")
-        last_action_button_states[state_key] = state
+        result = _call(get_digital_fn, [
+            lambda: get_digital_fn(handle),
+            lambda: get_digital_fn(handle, openvr.k_ulInvalidInputValueHandle),
+            lambda: get_digital_fn(handle, src) if src else None,
+        ])
+        data = _pick_data_obj(result)
+        fields = _compact_fields(data, ("bActive", "bState", "bChanged", "activeOrigin"))
+        print(f"[OpenVR][GetDigitalActionData] action={key} src={src} data={fields}")
 
+    for key, src in analog_targets:
+        handle = action_handles.get(key)
+        if not handle:
+            continue
+        result = _call(get_analog_fn, [
+            lambda: get_analog_fn(handle),
+            lambda: get_analog_fn(handle, openvr.k_ulInvalidInputValueHandle),
+            lambda: get_analog_fn(handle, src) if src else None,
+        ])
+        data = _pick_data_obj(result)
+        fields = _compact_fields(data, ("bActive", "x", "y", "z", "deltaX", "deltaY", "deltaZ", "activeOrigin"))
+        print(f"[OpenVR][GetAnalogActionData] action={key} src={src} data={fields}")
 
+    pose_handle = action_handles.get("pose")
+    if pose_handle:
+        tracking_universe = getattr(openvr, "TrackingUniverseStanding", 1)
+        result = _call(get_pose_fn, [
+            lambda: get_pose_fn(pose_handle, tracking_universe, 0.0),
+            lambda: get_pose_fn(pose_handle, tracking_universe, 0.0, openvr.k_ulInvalidInputValueHandle),
+            lambda: get_pose_fn(pose_handle, tracking_universe, 0.0, right_src) if right_src else None,
+        ])
+        data = _pick_data_obj(result)
+        fields = _compact_fields(data, ("bActive", "activeOrigin", "bPoseIsValid", "bDeviceIsConnected"))
+        print(f"[OpenVR][GetPoseActionDataRelativeToNow] action=pose data={fields}")
+
+    for key in ("l_skeleton", "r_skeleton"):
+        handle = action_handles.get(key)
+        if not handle:
+            continue
+
+        skel_action = _call(get_skel_action_fn, [
+            lambda: get_skel_action_fn(handle),
+            lambda: get_skel_action_fn(handle, openvr.k_ulInvalidInputValueHandle),
+        ])
+        skel_action_data = _pick_data_obj(skel_action)
+        print(f"[OpenVR][GetSkeletalActionData] action={key} data={_compact_fields(skel_action_data, ('bActive','activeOrigin'))}")
+
+        summary = _call(get_skel_summary_fn, [
+            lambda: get_skel_summary_fn(handle),
+            lambda: get_skel_summary_fn(handle, getattr(openvr, 'VRSummaryType_FromDevice', 1)),
+        ])
+        summary_data = _pick_data_obj(summary)
+        print(f"[OpenVR][GetSkeletalSummaryData] action={key} data={_compact_fields(summary_data, ('flFingerCurl0','flFingerCurl1','flFingerCurl2','flFingerCurl3','flFingerCurl4'))}")
+
+        bone = _call(get_skel_bone_fn, [
+            lambda: get_skel_bone_fn(handle, getattr(openvr, 'VRSkeletalTransformSpace_Model', 0), getattr(openvr, 'VRSkeletalMotionRange_WithController', 0)),
+            lambda: get_skel_bone_fn(handle, getattr(openvr, 'VRSkeletalTransformSpace_Model', 0), getattr(openvr, 'VRSkeletalMotionRange_WithController', 0), 31),
+        ])
+        bone_data = _pick_data_obj(bone)
+        bone_count = len(bone_data) if hasattr(bone_data, '__len__') else 0
+        print(f"[OpenVR][GetSkeletalBoneData] action={key} bone_count={bone_count}")
 def _get_input(ovr_context: OVRContext) -> dict[str, dict[str, float]] | None:
     vr_ipt = openvr.VRInput()
 
@@ -508,14 +431,9 @@ def _get_input(ovr_context: OVRContext) -> dict[str, dict[str, float]] | None:
             print(f"[OpenVR] updateActionState failed for all variants: {last_update_error}")
 
     try:
-        _log_controller_button_presses(ovr_context)
-    except Exception:
-        pass
-
-    try:
-        _log_action_button_states(vr_ipt)
-    except Exception:
-        pass
+        _log_openvr_action_api(vr_ipt)
+    except Exception as e:
+        print(f"[OpenVR] action api dump failed: {e}")
 
     def _calc_finger_curl(bone_transforms, chain: tuple[int, ...]) -> float:
         if len(chain) < 2:
