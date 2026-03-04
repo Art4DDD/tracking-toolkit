@@ -60,27 +60,25 @@ class RecorderPanel(View3DPanel, bpy.types.Panel):
         root_obj = bpy.data.objects.get("OVR Root")
         has_references = ovr_context.references_created and bool(root_obj)
 
-        if not ovr_context.enabled or not has_references:
-            return
+        if ovr_context.enabled and has_references:
+            layout.label(text="Recording")
 
-        layout.label(text="Recording")
+            record_btn_row = layout.row()
+            record_btn_row.scale_y = 2
+            record_btn_row.alert = ovr_context.recording
 
-        record_btn_row = layout.row()
-        record_btn_row.scale_y = 2
-        record_btn_row.alert = ovr_context.recording
+            active_record_label = "Stop Recording" if ovr_context.recording else "Start Recording"
+            active_record_icon = "RECORD_ON" if ovr_context.recording else "RECORD_OFF"
 
-        active_record_label = "Stop Recording" if ovr_context.recording else "Start Recording"
-        active_record_icon = "RECORD_ON" if ovr_context.recording else "RECORD_OFF"
+            # noinspection PyTypeChecker
+            record_btn_row.operator(
+                ToggleRecordOperator.bl_idname,
+                text=active_record_label,
+                icon=active_record_icon,
+                depress=True,
+            )
 
-        # noinspection PyTypeChecker
-        record_btn_row.operator(
-            ToggleRecordOperator.bl_idname,
-            text=active_record_label,
-            icon=active_record_icon,
-            depress=True,
-        )
-
-        layout.operator(ConvertSubframesOperator.bl_idname, text="Convert Subframes to Frames", icon="KEYTYPE_KEYFRAME_VEC")
+        layout.operator(ConvertSubframesOperator.bl_idname, text="Convert Subframes\nTo Frames", icon="KEYTYPE_KEYFRAME_VEC")
 
         layout.label(text="Skeletal Fingers")
 

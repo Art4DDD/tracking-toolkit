@@ -202,62 +202,96 @@ def _controller_trigger_values(vr_ipt, ovr_context: OVRContext) -> tuple[float, 
     left_active, left_pressed, left_changed, _, left_read_ok = _digital_state("l_trigger_click")
     right_active, right_pressed, right_changed, _, right_read_ok = _digital_state("r_trigger_click")
 
-    fallback_rows = []
+    raw_state_rows = []
 
-    # Fallback to raw controller state if action data is not active in current runtime/binding.
-    if not (left_active or right_active):
-        try:
-            system = openvr.VRSystem()
-            left_role = getattr(openvr, "TrackedControllerRole_LeftHand", 1)
-            right_role = getattr(openvr, "TrackedControllerRole_RightHand", 2)
-            role_prop = getattr(openvr, "Prop_ControllerRoleHint_Int32", None)
-            trigger_button = getattr(openvr, "k_EButton_SteamVR_Trigger", 33)
-            trigger_mask = 1 << trigger_button
+    try:
+        system = openvr.VRSystem()
+        left_role = getattr(openvr, "TrackedControllerRole_LeftHand", 1)
+        right_role = getattr(openvr, "TrackedControllerRole_RightHand", 2)
+        role_prop = getattr(openvr, "Prop_ControllerRoleHint_Int32", None)
+        trigger_button = getattr(openvr, "k_EButton_SteamVR_Trigger", 33)
+        trigger_mask = 1 << trigger_button
 
-            for tracker in ovr_context.trackers:
-                if tracker.type != str(openvr.TrackedDeviceClass_Controller):
-                    continue
+        for tracker in ovr_context.trackers:
+            if tracker.type != str(openvr.TrackedDeviceClass_Controller):
+                continue
 
-                role = None
-                if role_prop is not None:
+            role = None
+            if role_prop is not None:
+                try:
+                    role = system.getInt32TrackedDeviceProperty(tracker.index, role_prop)
+                except Exception:
+                    role = None
+
+            if role is None:
+                get_role_fn = getattr(system, "getControllerRoleForTrackedDeviceIndex", None) or getattr(system, "GetControllerRoleForTrackedDeviceIndex", None)
+                if get_role_fn:
                     try:
-                        role = system.getInt32TrackedDeviceProperty(tracker.index, role_prop)
+                        role = get_role_fn(tracker.index)
                     except Exception:
                         role = None
 
-                if role is None:
-                    get_role_fn = getattr(system, "getControllerRoleForTrackedDeviceIndex", None) or getattr(system, "GetControllerRoleForTrackedDeviceIndex", None)
-                    if get_role_fn:
-                        try:
-                            role = get_role_fn(tracker.index)
-                        except Exception:
-                            role = None
+            try:
+                controller_state = system.getControllerState(tracker.index)
+            except Exception:
+                continue
 
-                try:
-                    controller_state = system.getControllerState(tracker.index)
-                except Exception:
-                    continue
+            if isinstance(controller_state, tuple):
+                controller_state = controller_state[1] if len(controller_state) >= 2 else controller_state[0]
 
-                if isinstance(controller_state, tuple):
-                    controller_state = controller_state[1] if len(controller_state) >= 2 else controller_state[0]
+            ul_pressed = int(getattr(controller_state, "ulButtonPressed", 0))
+            ul_touched = int(getattr(controller_state, "ulButtonTouched", 0))
+            pressed = bool(ul_pressed & trigger_mask)
+            touched = bool(ul_touched & trigger_mask)
 
-                pressed = bool(getattr(controller_state, "ulButtonPressed", 0) & trigger_mask)
-                fallback_rows.append((tracker.index, role, pressed, int(getattr(controller_state, "ulButtonPressed", 0))))
+            axes = []
+            try:
+                for i in range(5):
+                    axes.append((i, float(controller_state.rAxis[i].x), float(controller_state.rAxis[i].y)))
+            except Exception:
+                pass
+
+            raw_state_rows.append({
+                "index": tracker.index,
+                "role": role,
+                "pressed": pressed,
+                "touched": touched,
+                "ulButtonPressed": ul_pressed,
+                "ulButtonTouched": ul_touched,
+                "axes": axes,
+            })
+
+            # Fallback to raw click when action data is not active.
+            if not (left_active or right_active):
                 if role == left_role:
                     left_active, left_pressed = True, pressed
                 elif role == right_role:
                     right_active, right_pressed = True, pressed
-        except Exception:
-            pass
 
-    # TEMP verbose debug print (requested): print every sampled trigger parameters.
+            # Also dump with pose API if available.
+            get_state_pose_fn = getattr(system, "getControllerStateWithPose", None) or getattr(system, "GetControllerStateWithPose", None)
+            if get_state_pose_fn:
+                for origin in (
+                        getattr(openvr, "TrackingUniverseSeated", 0),
+                        getattr(openvr, "TrackingUniverseStanding", 1),
+                        getattr(openvr, "TrackingUniverseRawAndUncalibrated", 2),
+                ):
+                    try:
+                        state_pose = get_state_pose_fn(origin, tracker.index)
+                        raw_state_rows.append({"index": tracker.index, "origin": origin, "state_with_pose": str(state_pose)[:180]})
+                    except Exception:
+                        continue
+    except Exception:
+        pass
+
+    # TEMP verbose debug print (requested): print all available trigger-click related values every poll.
     print(
         "[OpenVR Trigger Debug] "
         f"handles(L,R)=({l_handle},{r_handle}) "
         f"digital_read_ok(L,R)=({left_read_ok},{right_read_ok}) "
         f"digital(L)=active:{left_active} state:{left_pressed} changed:{left_changed} "
         f"digital(R)=active:{right_active} state:{right_pressed} changed:{right_changed} "
-        f"fallback_rows={fallback_rows}"
+        f"raw_states={raw_state_rows}"
     )
 
     if not (left_active or right_active) and not trigger_debug_missing_data_logged:
