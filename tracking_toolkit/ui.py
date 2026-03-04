@@ -81,11 +81,13 @@ class RecorderPanel(View3DPanel, bpy.types.Panel):
         show_tools = ovr_context.enabled or bool(root_obj)
         if not show_tools:
             return
-
         if ovr_context.recordings_made:
-            convert_row = layout.row()
-            convert_row.scale_y = 2
-            convert_row.operator(ConvertSubframesOperator.bl_idname, text="Convert Subframes To Frames", icon="KEYTYPE_KEYFRAME_VEC")
+            convert_box = layout.box()
+            convert_col = convert_box.column(align=True)
+            convert_col.scale_y = 1.0
+            convert_col.operator(ConvertSubframesOperator.bl_idname, text="Convert", icon="KEYTYPE_KEYFRAME_VEC", emboss=False)
+            convert_col.operator(ConvertSubframesOperator.bl_idname, text="Subframes To Frames", emboss=False)
+Subframes To Frames", icon="KEYTYPE_KEYFRAME_VEC")
 
         if not (ovr_context.references_ever_created and root_obj):
             return
