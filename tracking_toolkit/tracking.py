@@ -164,14 +164,14 @@ def _handle_input(ovr_context: OVRContext, input_state: dict[str, dict[str, floa
 def _controller_trigger_values(vr_ipt, ovr_context: OVRContext) -> tuple[float, float]:
     global trigger_debug_last_state, trigger_debug_missing_data_logged
 
-    def _digital_state(action_key: str) -> tuple[bool, bool]:
+    def _digital_state(action_key: str) -> tuple[bool, bool, bool | None, bool | None, bool | None]:
         action = action_handles.get(action_key)
         if action is None:
-            return False, False
+            return False, False, None, None, None
 
         get_digital_fn = getattr(vr_ipt, "getDigitalActionData", None) or getattr(vr_ipt, "GetDigitalActionData", None)
         if not get_digital_fn:
-            return False, False
+            return False, False, None, None, None
 
         variants = [
             lambda: get_digital_fn(action),
@@ -192,12 +192,17 @@ def _controller_trigger_values(vr_ipt, ovr_context: OVRContext) -> tuple[float, 
 
             active = _safe_getattr_bool(digital_data, "bActive", True)
             state = _safe_getattr_bool(digital_data, "bState", False)
-            return active, state
+            changed = _safe_getattr_bool(digital_data, "bChanged", False)
+            return active, state, changed, True, True
 
-        return False, False
+        return False, False, None, True, False
 
-    left_active, left_pressed = _digital_state("l_trigger_click")
-    right_active, right_pressed = _digital_state("r_trigger_click")
+    l_handle = action_handles.get("l_trigger_click")
+    r_handle = action_handles.get("r_trigger_click")
+    left_active, left_pressed, left_changed, _, left_read_ok = _digital_state("l_trigger_click")
+    right_active, right_pressed, right_changed, _, right_read_ok = _digital_state("r_trigger_click")
+
+    fallback_rows = []
 
     # Fallback to raw controller state if action data is not active in current runtime/binding.
     if not (left_active or right_active):
@@ -237,12 +242,23 @@ def _controller_trigger_values(vr_ipt, ovr_context: OVRContext) -> tuple[float, 
                     controller_state = controller_state[1] if len(controller_state) >= 2 else controller_state[0]
 
                 pressed = bool(getattr(controller_state, "ulButtonPressed", 0) & trigger_mask)
+                fallback_rows.append((tracker.index, role, pressed, int(getattr(controller_state, "ulButtonPressed", 0))))
                 if role == left_role:
                     left_active, left_pressed = True, pressed
                 elif role == right_role:
                     right_active, right_pressed = True, pressed
         except Exception:
             pass
+
+    # TEMP verbose debug print (requested): print every sampled trigger parameters.
+    print(
+        "[OpenVR Trigger Debug] "
+        f"handles(L,R)=({l_handle},{r_handle}) "
+        f"digital_read_ok(L,R)=({left_read_ok},{right_read_ok}) "
+        f"digital(L)=active:{left_active} state:{left_pressed} changed:{left_changed} "
+        f"digital(R)=active:{right_active} state:{right_pressed} changed:{right_changed} "
+        f"fallback_rows={fallback_rows}"
+    )
 
     if not (left_active or right_active) and not trigger_debug_missing_data_logged:
         print("[OpenVR Trigger] No active trigger click data (action + raw fallback both inactive)")

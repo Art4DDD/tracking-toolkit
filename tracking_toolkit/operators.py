@@ -21,7 +21,7 @@ TRACKER_BOX_EDGES = [
 class ConvertSubframesOperator(bpy.types.Operator):
     bl_idname = "id.convert_subframes_to_frames"
     bl_label = "Convert subframes to frames"
-    bl_description = "Snap keyframe times to whole frames while preserving original curve tangents"
+    bl_description = "Snap keyframe times to unique whole frames while keeping the curve smooth"
     bl_options = {"UNDO"}
 
     def execute(self, context):
@@ -46,13 +46,24 @@ class ConvertSubframesOperator(bpy.types.Operator):
                 if not keys:
                     continue
 
-                for key in keys:
-                    rounded_frame = round(float(key.co.x))
-                    delta = rounded_frame - float(key.co.x)
-                    key.co.x = rounded_frame
-                    key.handle_left.x += delta
-                    key.handle_right.x += delta
-                    key_count += 1
+                target_frames = sorted({int(round(float(key.co.x))) for key in keys})
+                sampled_values = [float(fcurve.evaluate(frame)) for frame in target_frames]
+
+                fcurve.keyframe_points.clear()
+                fcurve.keyframe_points.add(len(target_frames))
+
+                key_coords = [0.0] * (len(target_frames) * 2)
+                key_coords[0::2] = target_frames
+                key_coords[1::2] = sampled_values
+                fcurve.keyframe_points.foreach_set("co", key_coords)
+
+                for key in fcurve.keyframe_points:
+                    key.interpolation = "BEZIER"
+                    key.handle_left_type = "AUTO_CLAMPED"
+                    key.handle_right_type = "AUTO_CLAMPED"
+
+                fcurve.update()
+                key_count += len(target_frames)
 
         self.report({"INFO"}, f"Converted {key_count} keyframes to integer frames")
         return {"FINISHED"}
