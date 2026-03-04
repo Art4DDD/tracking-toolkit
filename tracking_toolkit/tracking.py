@@ -286,6 +286,9 @@ def _log_controller_button_presses(ovr_context: OVRContext):
 
     seen_indexes = set()
 
+    is_connected_fn = getattr(system, "isTrackedDeviceConnected", None) or getattr(system, "IsTrackedDeviceConnected", None)
+    get_class_fn = getattr(system, "getTrackedDeviceClass", None) or getattr(system, "GetTrackedDeviceClass", None)
+
     # Preferred path: explicit left/right role indexes from OpenVR.
     if get_idx_fn:
         for side, role in (("left", getattr(openvr, "TrackedControllerRole_LeftHand", 1)), ("right", getattr(openvr, "TrackedControllerRole_RightHand", 2))):
@@ -300,13 +303,37 @@ def _log_controller_button_presses(ovr_context: OVRContext):
 
             seen_indexes.add(idx)
             state = _read_state(idx)
+
+            connected = False
+            if is_connected_fn:
+                try:
+                    connected = bool(is_connected_fn(idx))
+                except Exception:
+                    connected = False
+
+            device_class = None
+            if get_class_fn:
+                try:
+                    device_class = int(get_class_fn(idx))
+                except Exception:
+                    device_class = None
+
             if not state:
+                if button_log_poll_count % 120 == 0:
+                    print(f"[OpenVR] role={side} idx={idx} connected={connected} class={device_class} state=unavailable")
                 continue
 
             pressed = int(getattr(state, "ulButtonPressed", 0))
             touched = int(getattr(state, "ulButtonTouched", 0))
             prev_pressed = int(last_controller_button_masks.get(idx, -1))
             last_controller_button_masks[f"role_{side}"] = pressed
+
+            if button_log_poll_count % 120 == 0:
+                print(
+                    f"[OpenVR] role={side} idx={idx} connected={connected} class={device_class} "
+                    f"pressed={'yes' if pressed else 'no'} touched={'yes' if touched else 'no'} "
+                    f"ulButtonPressed=0x{pressed:016X}"
+                )
 
             if pressed != prev_pressed:
                 pressed_names = ", ".join(_decode_button_mask(pressed)) or "none"
@@ -331,11 +358,20 @@ def _log_controller_button_presses(ovr_context: OVRContext):
 
         state = _read_state(tracker.index)
         if not state:
+            if button_log_poll_count % 120 == 0:
+                print(f"[OpenVR] tracker={tracker.name} idx={tracker.index} state=unavailable")
             continue
 
         pressed = int(getattr(state, "ulButtonPressed", 0))
         touched = int(getattr(state, "ulButtonTouched", 0))
         prev_pressed = int(last_controller_button_masks.get(tracker.index, -1))
+
+        if button_log_poll_count % 120 == 0:
+            print(
+                f"[OpenVR] tracker={tracker.name} idx={tracker.index} "
+                f"pressed={'yes' if pressed else 'no'} touched={'yes' if touched else 'no'} "
+                f"ulButtonPressed=0x{pressed:016X}"
+            )
 
         if pressed != prev_pressed:
             pressed_names = ", ".join(_decode_button_mask(pressed)) or "none"
