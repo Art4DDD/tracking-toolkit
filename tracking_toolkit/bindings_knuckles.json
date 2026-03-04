@@ -31,6 +31,15 @@
               "output": "/actions/default/in/TriggerClickRight"
             }
           }
+        },
+        {
+          "path": "/user/hand/right/input/trigger",
+          "mode": "button",
+          "inputs": {
+            "click": {
+              "output": "/actions/default/in/InteractUI"
+            }
+          }
         }
       ]
     }
