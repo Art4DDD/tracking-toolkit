@@ -24,6 +24,7 @@ buffer_lock = threading.Lock()
 recording_active = False
 action_sets = []
 action_handles = {}
+input_source_handles = {"left": 0, "right": 0}
 trigger_click_state = {"left": False, "right": False, "interact_ui": False, "event_left": False, "event_right": False}
 
 FINGER_CHANNELS = ("thumb_curl", "index_curl", "middle_curl", "ring_curl", "pinky_curl")
@@ -118,6 +119,20 @@ def init_handles():
                 return handle
         return None
 
+    def _get_input_source_handle(source_path: str):
+        get_source_fn = getattr(vr_ipt, "getInputSourceHandle", None) or getattr(vr_ipt, "GetInputSourceHandle", None)
+        if not get_source_fn:
+            return 0
+        variants = [source_path, source_path.lower()]
+        for variant in variants:
+            try:
+                handle = _unwrap_handle(get_source_fn(variant))
+            except Exception:
+                continue
+            if handle:
+                return int(handle)
+        return 0
+
     global action_sets
     action_set_handle = _get_action_set_handle("/actions/default")
     action_sets = (openvr.VRActiveActionSet_t * 1)()
@@ -132,8 +147,15 @@ def init_handles():
         "interact_ui": _get_action_handle("/actions/default/in/InteractUI"),
     }
 
+    global input_source_handles
+    input_source_handles = {
+        "left": _get_input_source_handle("/user/hand/left"),
+        "right": _get_input_source_handle("/user/hand/right"),
+    }
+
     print(f"[OpenVR] Action set '/actions/default' handle: {action_sets[0].ulActionSet}")
     print(f"[OpenVR] Trigger handles: left={action_handles.get('l_trigger_click')} right={action_handles.get('r_trigger_click')} interact_ui={action_handles.get('interact_ui')}")
+    print(f"[OpenVR] Input source handles: left={input_source_handles.get('left')} right={input_source_handles.get('right')}")
 
 
 def _handle_input(ovr_context: OVRContext, input_state: dict[str, dict[str, float]]):
@@ -194,7 +216,7 @@ def _controller_trigger_values(vr_ipt, ovr_context: OVRContext) -> tuple[float, 
                 continue
         return default
 
-    def _digital_state(action_key: str) -> tuple[bool, bool, bool]:
+    def _digital_state(action_key: str, side: str | None = None) -> tuple[bool, bool, bool]:
         action = action_handles.get(action_key)
         if action is None or int(action) == 0:
             return False, False, False
@@ -203,10 +225,19 @@ def _controller_trigger_values(vr_ipt, ovr_context: OVRContext) -> tuple[float, 
         if not get_digital_fn:
             return False, False, False
 
+        source_handle = 0
+        if side:
+            source_handle = int(input_source_handles.get(side, 0) or 0)
+
         call_variants = [
             lambda: get_digital_fn(action),
             lambda: get_digital_fn(action, openvr.k_ulInvalidInputValueHandle),
         ]
+        if source_handle:
+            call_variants.extend([
+                lambda: get_digital_fn(action, source_handle),
+                lambda: get_digital_fn(action, int(source_handle)),
+            ])
 
         for call in call_variants:
             try:
@@ -224,13 +255,17 @@ def _controller_trigger_values(vr_ipt, ovr_context: OVRContext) -> tuple[float, 
 
         return False, False, False
 
-    left_active, left_pressed, left_changed = _digital_state("l_trigger_click")
-    right_active, right_pressed, right_changed = _digital_state("r_trigger_click")
-    interact_active, interact_pressed, interact_changed = _digital_state("interact_ui")
+    left_active, left_pressed, left_changed = _digital_state("l_trigger_click", "left")
+    right_active, right_pressed, right_changed = _digital_state("r_trigger_click", "right")
+    interact_active, interact_pressed, interact_changed = _digital_state("interact_ui", "right")
 
     # InteractUI is often bound to right trigger click in SteamVR sample manifests.
     if interact_active and not right_active:
         right_active, right_pressed = True, interact_pressed
+    if not interact_active:
+        li_active, li_pressed, li_changed = _digital_state("interact_ui", "left")
+        if li_active:
+            interact_active, interact_pressed, interact_changed = li_active, li_pressed, li_changed
 
     if left_active and left_changed and left_pressed:
         print("[OpenVR] Trigger click fired (digital): left")
