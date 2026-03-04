@@ -134,16 +134,14 @@ def init_handles():
 
     global action_sets
     default_action_set_handle = _get_action_set_handle("/actions/default")
-    platformer_action_set_handle = _get_action_set_handle("/actions/platformer")
-    action_sets = (openvr.VRActiveActionSet_t * 2)()
+    action_sets = (openvr.VRActiveActionSet_t * 1)()
     action_sets[0].ulActionSet = int(default_action_set_handle or 0)
-    action_sets[1].ulActionSet = int(platformer_action_set_handle or 0)
 
     global action_handles
     action_handles = {
         "l_skeleton": _get_action_handle("/actions/default/in/SkeletonLeftHand"),
         "r_skeleton": _get_action_handle("/actions/default/in/SkeletonRightHand"),
-        "jump": _get_action_handle("/actions/platformer/in/Jump"),
+        "click": _get_action_handle("/actions/default/in/Click"),
         "squeeze": _get_action_handle("/actions/default/in/Squeeze"),
     }
 
@@ -153,7 +151,7 @@ def init_handles():
         "right": _get_input_source_handle("/user/hand/right"),
     }
 
-    print(f"[OpenVR] Action set handles: default={action_sets[0].ulActionSet} platformer={action_sets[1].ulActionSet}")
+    print(f"[OpenVR] Action set '/actions/default' handle: {action_sets[0].ulActionSet}")
     print(f"[OpenVR] Input source handles: left={input_source_handles.get('left')} right={input_source_handles.get('right')}")
     print(f"[OpenVR] Action handles: {action_handles}")
 
@@ -424,7 +422,7 @@ def _get_input(ovr_context: OVRContext) -> dict[str, dict[str, float]] | None:
         "middle_curl": float((l_skeletal or {}).get("middle", previous_left["middle_curl"])),
         "ring_curl": float((l_skeletal or {}).get("ring", previous_left["ring_curl"])),
         "pinky_curl": float((l_skeletal or {}).get("pinky", previous_left["pinky_curl"])),
-        "click": _get_digital_action("jump", "left") if updated else previous_left["click"],
+        "click": _get_digital_action("click", "left") if updated else previous_left["click"],
         "squeeze": _get_analog_action("squeeze", "left") if updated else previous_left["squeeze"],
     }
     right_data = {
@@ -433,7 +431,7 @@ def _get_input(ovr_context: OVRContext) -> dict[str, dict[str, float]] | None:
         "middle_curl": float((r_skeletal or {}).get("middle", previous_right["middle_curl"])),
         "ring_curl": float((r_skeletal or {}).get("ring", previous_right["ring_curl"])),
         "pinky_curl": float((r_skeletal or {}).get("pinky", previous_right["pinky_curl"])),
-        "click": _get_digital_action("jump", "right") if updated else previous_right["click"],
+        "click": _get_digital_action("click", "right") if updated else previous_right["click"],
         "squeeze": _get_analog_action("squeeze", "right") if updated else previous_right["squeeze"],
     }
 
