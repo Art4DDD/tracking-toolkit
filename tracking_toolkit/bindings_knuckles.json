@@ -73,18 +73,24 @@
         },
         {
           "path": "/user/hand/left/input/grip",
-          "mode": "force_sensor",
+          "mode": "button",
           "inputs": {
-            "force": {
+            "click": {
+              "output": "/actions/default/in/GrabGrip"
+            },
+            "pull": {
               "output": "/actions/default/in/Squeeze"
             }
           }
         },
         {
           "path": "/user/hand/right/input/grip",
-          "mode": "force_sensor",
+          "mode": "button",
           "inputs": {
-            "force": {
+            "click": {
+              "output": "/actions/default/in/GrabGrip"
+            },
+            "pull": {
               "output": "/actions/default/in/Squeeze"
             }
           }
@@ -104,6 +110,24 @@
           "inputs": {
             "click": {
               "output": "/actions/default/in/Teleport"
+            }
+          }
+        },
+        {
+          "path": "/user/hand/left/input/a",
+          "mode": "button",
+          "inputs": {
+            "click": {
+              "output": "/actions/default/in/SnapTurnLeft"
+            }
+          }
+        },
+        {
+          "path": "/user/hand/right/input/a",
+          "mode": "button",
+          "inputs": {
+            "click": {
+              "output": "/actions/default/in/SnapTurnRight"
             }
           }
         }

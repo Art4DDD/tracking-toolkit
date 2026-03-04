@@ -111,3 +111,30 @@ class RecorderPanel(View3DPanel, bpy.types.Panel):
 
         draw_hand_props(layout, "Left Hand", "left")
         draw_hand_props(layout, "Right Hand", "right")
+
+        layout.label(text="Action Inputs")
+
+        def draw_action_props(block_layout, title: str, prefix: str):
+            box = block_layout.box()
+            box.label(text=title)
+            if not root_obj:
+                box.label(text="OVR Root not found", icon="ERROR")
+                return
+
+            for suffix, label in (
+                ("trigger_click", "Trigger Click"),
+                ("interact_ui", "Interact UI"),
+                ("teleport", "Teleport"),
+                ("grab_pinch", "Grab Pinch"),
+                ("grab_grip", "Grab Grip"),
+                ("squeeze", "Squeeze"),
+                ("snap_turn_left", "Snap Turn Left"),
+                ("snap_turn_right", "Snap Turn Right"),
+            ):
+                channel = f"{prefix}_{suffix}"
+                if channel not in root_obj:
+                    root_obj[channel] = 0.0
+                box.prop(root_obj, f'["{channel}"]', text=label)
+
+        draw_action_props(layout, "Left Hand Actions", "left")
+        draw_action_props(layout, "Right Hand Actions", "right")
