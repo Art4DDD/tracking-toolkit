@@ -36,6 +36,7 @@ latest_input_state = {
 
 trigger_toggle_latched = False
 trigger_debug_last_state = {"left": False, "right": False, "both": False}
+trigger_debug_missing_data_logged = False
 
 FINGER_BONE_CHAINS = {
     "thumb": (2, 3, 4, 5),
@@ -160,8 +161,8 @@ def _handle_input(ovr_context: OVRContext, input_state: dict[str, dict[str, floa
         root_obj[channel] = value
 
 
-def _controller_trigger_values(vr_ipt) -> tuple[float, float]:
-    global trigger_debug_last_state
+def _controller_trigger_values(vr_ipt, ovr_context: OVRContext) -> tuple[float, float]:
+    global trigger_debug_last_state, trigger_debug_missing_data_logged
 
     def _digital_state(action_key: str) -> tuple[bool, bool]:
         action = action_handles.get(action_key)
@@ -191,13 +192,61 @@ def _controller_trigger_values(vr_ipt) -> tuple[float, float]:
 
             active = _safe_getattr_bool(digital_data, "bActive", True)
             state = _safe_getattr_bool(digital_data, "bState", False)
-            if active:
-                return active, state
+            return active, state
 
         return False, False
 
     left_active, left_pressed = _digital_state("l_trigger_click")
     right_active, right_pressed = _digital_state("r_trigger_click")
+
+    # Fallback to raw controller state if action data is not active in current runtime/binding.
+    if not (left_active or right_active):
+        try:
+            system = openvr.VRSystem()
+            left_role = getattr(openvr, "TrackedControllerRole_LeftHand", 1)
+            right_role = getattr(openvr, "TrackedControllerRole_RightHand", 2)
+            role_prop = getattr(openvr, "Prop_ControllerRoleHint_Int32", None)
+            trigger_button = getattr(openvr, "k_EButton_SteamVR_Trigger", 33)
+            trigger_mask = 1 << trigger_button
+
+            for tracker in ovr_context.trackers:
+                if tracker.type != str(openvr.TrackedDeviceClass_Controller):
+                    continue
+
+                role = None
+                if role_prop is not None:
+                    try:
+                        role = system.getInt32TrackedDeviceProperty(tracker.index, role_prop)
+                    except Exception:
+                        role = None
+
+                if role is None:
+                    get_role_fn = getattr(system, "getControllerRoleForTrackedDeviceIndex", None) or getattr(system, "GetControllerRoleForTrackedDeviceIndex", None)
+                    if get_role_fn:
+                        try:
+                            role = get_role_fn(tracker.index)
+                        except Exception:
+                            role = None
+
+                try:
+                    controller_state = system.getControllerState(tracker.index)
+                except Exception:
+                    continue
+
+                if isinstance(controller_state, tuple):
+                    controller_state = controller_state[1] if len(controller_state) >= 2 else controller_state[0]
+
+                pressed = bool(getattr(controller_state, "ulButtonPressed", 0) & trigger_mask)
+                if role == left_role:
+                    left_active, left_pressed = True, pressed
+                elif role == right_role:
+                    right_active, right_pressed = True, pressed
+        except Exception:
+            pass
+
+    if not (left_active or right_active) and not trigger_debug_missing_data_logged:
+        print("[OpenVR Trigger] No active trigger click data (action + raw fallback both inactive)")
+        trigger_debug_missing_data_logged = True
 
     current = {
         "left": left_pressed,
@@ -365,7 +414,7 @@ def _get_input(ovr_context: OVRContext) -> dict[str, dict[str, float]] | None:
         previous_left = latest_input_state["left"].copy()
         previous_right = latest_input_state["right"].copy()
 
-    left_trigger, right_trigger = _controller_trigger_values(vr_ipt)
+    left_trigger, right_trigger = _controller_trigger_values(vr_ipt, ovr_context)
 
     left_data = {
         "thumb_curl": float((l_skeletal or {}).get("thumb", previous_left["thumb_curl"])),

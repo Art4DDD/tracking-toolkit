@@ -21,7 +21,7 @@ TRACKER_BOX_EDGES = [
 class ConvertSubframesOperator(bpy.types.Operator):
     bl_idname = "id.convert_subframes_to_frames"
     bl_label = "Convert subframes to frames"
-    bl_description = "Resample keyframes to integer frames while preserving smooth curve shape"
+    bl_description = "Snap keyframe times to whole frames while preserving original curve tangents"
     bl_options = {"UNDO"}
 
     def execute(self, context):
@@ -42,27 +42,17 @@ class ConvertSubframesOperator(bpy.types.Operator):
         key_count = 0
         for action in actions:
             for fcurve in action.fcurves:
-                if len(fcurve.keyframe_points) == 0:
+                keys = list(fcurve.keyframe_points)
+                if not keys:
                     continue
 
-                sampled_frames = sorted({int(round(float(key.co.x))) for key in fcurve.keyframe_points})
-                sampled_values = [float(fcurve.evaluate(frame)) for frame in sampled_frames]
-
-                fcurve.keyframe_points.clear()
-                fcurve.keyframe_points.add(len(sampled_frames))
-
-                key_coords = [0.0] * (len(sampled_frames) * 2)
-                key_coords[0::2] = sampled_frames
-                key_coords[1::2] = sampled_values
-                fcurve.keyframe_points.foreach_set("co", key_coords)
-
-                for key in fcurve.keyframe_points:
-                    key.interpolation = "BEZIER"
-                    key.handle_left_type = "AUTO_CLAMPED"
-                    key.handle_right_type = "AUTO_CLAMPED"
-
-                fcurve.update()
-                key_count += len(sampled_frames)
+                for key in keys:
+                    rounded_frame = round(float(key.co.x))
+                    delta = rounded_frame - float(key.co.x)
+                    key.co.x = rounded_frame
+                    key.handle_left.x += delta
+                    key.handle_right.x += delta
+                    key_count += 1
 
         self.report({"INFO"}, f"Converted {key_count} keyframes to integer frames")
         return {"FINISHED"}
