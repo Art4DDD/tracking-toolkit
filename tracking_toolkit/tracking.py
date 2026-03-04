@@ -24,6 +24,7 @@ buffer_lock = threading.Lock()
 recording_active = False
 action_sets = []
 action_handles = {}
+last_controller_button_masks = {}
 FINGER_CHANNELS = ("thumb_curl", "index_curl", "middle_curl", "ring_curl", "pinky_curl")
 latest_input_state = {
     "left": {channel: 0.0 for channel in FINGER_CHANNELS},
@@ -168,6 +169,55 @@ def _handle_input(ovr_context: OVRContext, input_state: dict[str, dict[str, floa
         root_obj[channel] = value
 
 
+def _log_controller_button_presses(ovr_context: OVRContext):
+    system = openvr.VRSystem()
+    get_state_fn = getattr(system, "getControllerState", None) or getattr(system, "GetControllerState", None)
+    if not get_state_fn:
+        return
+
+    global last_controller_button_masks
+
+    for tracker in ovr_context.trackers:
+        if tracker.type != str(openvr.TrackedDeviceClass_Controller):
+            continue
+
+        state = None
+        calls = [
+            lambda: get_state_fn(tracker.index),
+            lambda: get_state_fn(tracker.index, openvr.VRControllerState_t()),
+        ]
+        for call in calls:
+            try:
+                result = call()
+            except Exception:
+                continue
+
+            if isinstance(result, tuple):
+                if len(result) >= 2:
+                    state = result[1]
+                elif len(result) == 1:
+                    state = result[0]
+            else:
+                state = result
+
+            if state:
+                break
+
+        if not state:
+            continue
+
+        pressed = int(getattr(state, "ulButtonPressed", 0))
+        touched = int(getattr(state, "ulButtonTouched", 0))
+        prev_pressed = int(last_controller_button_masks.get(tracker.index, -1))
+
+        if pressed != prev_pressed:
+            print(
+                f"[OpenVR] Controller {tracker.name} idx={tracker.index} "
+                f"ulButtonPressed=0x{pressed:016X} ulButtonTouched=0x{touched:016X}"
+            )
+            last_controller_button_masks[tracker.index] = pressed
+
+
 def _get_input(ovr_context: OVRContext) -> dict[str, dict[str, float]] | None:
     vr_ipt = openvr.VRInput()
 
@@ -193,6 +243,11 @@ def _get_input(ovr_context: OVRContext) -> dict[str, dict[str, float]] | None:
                 continue
         if not updated:
             print(f"[OpenVR] updateActionState failed for all variants: {last_update_error}")
+
+    try:
+        _log_controller_button_presses(ovr_context)
+    except Exception:
+        pass
 
     def _calc_finger_curl(bone_transforms, chain: tuple[int, ...]) -> float:
         if len(chain) < 2:
