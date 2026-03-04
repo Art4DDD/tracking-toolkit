@@ -26,6 +26,7 @@ action_sets = []
 action_handles = {}
 input_source_handles = {"left": 0, "right": 0}
 trigger_click_state = {"left": False, "right": False, "interact_ui": False, "event_left": False, "event_right": False}
+trigger_debug_counter = 0
 
 FINGER_CHANNELS = ("thumb_curl", "index_curl", "middle_curl", "ring_curl", "pinky_curl")
 TRIGGER_CHANNEL = "trigger_value"
@@ -216,14 +217,14 @@ def _controller_trigger_values(vr_ipt, ovr_context: OVRContext) -> tuple[float, 
                 continue
         return default
 
-    def _digital_state(action_key: str, side: str | None = None) -> tuple[bool, bool, bool]:
+    def _digital_state(action_key: str, side: str | None = None) -> tuple[bool, bool, bool, object]:
         action = action_handles.get(action_key)
         if action is None or int(action) == 0:
-            return False, False, False
+            return False, False, False, None
 
         get_digital_fn = getattr(vr_ipt, "getDigitalActionData", None) or getattr(vr_ipt, "GetDigitalActionData", None)
         if not get_digital_fn:
-            return False, False, False
+            return False, False, False, None
 
         source_handle = 0
         if side:
@@ -251,21 +252,33 @@ def _controller_trigger_values(vr_ipt, ovr_context: OVRContext) -> tuple[float, 
             active = _read_bool_attr(digital_data, ("bActive", "active"), default=True)
             state = _read_bool_attr(digital_data, ("bState", "state"), default=False)
             changed = _read_bool_attr(digital_data, ("bChanged", "changed"), default=False)
-            return active, state, changed
+            return active, state, changed, digital_data
 
-        return False, False, False
+        return False, False, False, None
 
-    left_active, left_pressed, left_changed = _digital_state("l_trigger_click", "left")
-    right_active, right_pressed, right_changed = _digital_state("r_trigger_click", "right")
-    interact_active, interact_pressed, interact_changed = _digital_state("interact_ui", "right")
+    left_active, left_pressed, left_changed, left_raw = _digital_state("l_trigger_click", "left")
+    right_active, right_pressed, right_changed, right_raw = _digital_state("r_trigger_click", "right")
+    interact_active, interact_pressed, interact_changed, interact_raw = _digital_state("interact_ui", "right")
 
     # InteractUI is often bound to right trigger click in SteamVR sample manifests.
     if interact_active and not right_active:
         right_active, right_pressed = True, interact_pressed
     if not interact_active:
-        li_active, li_pressed, li_changed = _digital_state("interact_ui", "left")
+        li_active, li_pressed, li_changed, li_raw = _digital_state("interact_ui", "left")
         if li_active:
             interact_active, interact_pressed, interact_changed = li_active, li_pressed, li_changed
+            interact_raw = li_raw
+
+    global trigger_debug_counter
+    trigger_debug_counter += 1
+    if left_changed or right_changed or interact_changed or left_pressed or right_pressed or interact_pressed or (trigger_debug_counter % 120 == 0):
+        print(
+            "[OpenVR][TriggerDebug][Digital] "
+            f"left(active={left_active},state={left_pressed},changed={left_changed}) "
+            f"right(active={right_active},state={right_pressed},changed={right_changed}) "
+            f"interact(active={interact_active},state={interact_pressed},changed={interact_changed}) "
+            f"raw_types=({type(left_raw).__name__},{type(right_raw).__name__},{type(interact_raw).__name__})"
+        )
 
     if left_active and left_changed and left_pressed:
         print("[OpenVR] Trigger click fired (digital): left")
@@ -404,6 +417,11 @@ def _controller_trigger_values(vr_ipt, ovr_context: OVRContext) -> tuple[float, 
                     trigger_axis_val = max(trigger_axis_val, x, y)
             axis_pressed = trigger_axis_val >= 0.75
             legacy_pressed = mask_pressed or axis_pressed
+            if legacy_pressed or (trigger_debug_counter % 120 == 0):
+                print(
+                    f"[OpenVR][TriggerDebug][ControllerState] idx={tracker.index} role={role} "
+                    f"mask={mask_pressed} axis={trigger_axis_val:.3f} pressed={legacy_pressed}"
+                )
 
             side = None
             if role == left_role:
@@ -441,6 +459,13 @@ def _controller_trigger_values(vr_ipt, ovr_context: OVRContext) -> tuple[float, 
     left_pressed = bool(left_pressed or trigger_click_state.get("event_left", False))
     right_pressed = bool(right_pressed or trigger_click_state.get("event_right", False))
 
+    if left_pressed or right_pressed or (trigger_debug_counter % 120 == 0):
+        print(
+            "[OpenVR][TriggerDebug][Final] "
+            f"left={left_pressed} right={right_pressed} "
+            f"event_left={trigger_click_state.get('event_left', False)} event_right={trigger_click_state.get('event_right', False)}"
+        )
+
     return float(left_pressed), float(right_pressed)
 
 
@@ -458,13 +483,17 @@ def _get_input(ovr_context: OVRContext) -> dict[str, dict[str, float]] | None:
                 lambda: update_fn(action_sets[0], ctypes.sizeof(openvr.VRActiveActionSet_t), 1),
             ]
 
+        last_update_error = None
         for update_call in update_variants:
             try:
                 update_call()
                 updated = True
                 break
-            except Exception:
+            except Exception as e:
+                last_update_error = e
                 continue
+        if not updated:
+            print(f"[OpenVR] updateActionState failed for all variants: {last_update_error}")
 
     def _calc_finger_curl(bone_transforms, chain: tuple[int, ...]) -> float:
         if len(chain) < 2:
