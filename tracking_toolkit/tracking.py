@@ -24,10 +24,12 @@ buffer_lock = threading.Lock()
 recording_active = False
 action_sets = []
 action_handles = {}
+input_source_handles = {"left": 0, "right": 0}
 FINGER_CHANNELS = ("thumb_curl", "index_curl", "middle_curl", "ring_curl", "pinky_curl")
+ACTION_CHANNELS = ("click", "squeeze")
 latest_input_state = {
-    "left": {channel: 0.0 for channel in FINGER_CHANNELS},
-    "right": {channel: 0.0 for channel in FINGER_CHANNELS},
+    "left": {channel: 0.0 for channel in (*FINGER_CHANNELS, *ACTION_CHANNELS)},
+    "right": {channel: 0.0 for channel in (*FINGER_CHANNELS, *ACTION_CHANNELS)},
 }
 
 FINGER_BONE_CHAINS = {
@@ -117,18 +119,42 @@ def init_handles():
                 return handle
         return None
 
+    def _get_input_source_handle(source_path: str):
+        get_source_fn = getattr(vr_ipt, "getInputSourceHandle", None) or getattr(vr_ipt, "GetInputSourceHandle", None)
+        if not get_source_fn:
+            return 0
+        for variant in (source_path, source_path.lower()):
+            try:
+                handle = _unwrap_handle(get_source_fn(variant))
+            except Exception:
+                continue
+            if handle:
+                return int(handle)
+        return 0
+
     global action_sets
-    action_set_handle = _get_action_set_handle("/actions/default")
-    action_sets = (openvr.VRActiveActionSet_t * 1)()
-    action_sets[0].ulActionSet = int(action_set_handle or 0)
+    default_action_set_handle = _get_action_set_handle("/actions/default")
+    platformer_action_set_handle = _get_action_set_handle("/actions/platformer")
+    action_sets = (openvr.VRActiveActionSet_t * 2)()
+    action_sets[0].ulActionSet = int(default_action_set_handle or 0)
+    action_sets[1].ulActionSet = int(platformer_action_set_handle or 0)
 
     global action_handles
     action_handles = {
         "l_skeleton": _get_action_handle("/actions/default/in/SkeletonLeftHand"),
         "r_skeleton": _get_action_handle("/actions/default/in/SkeletonRightHand"),
+        "jump": _get_action_handle("/actions/platformer/in/Jump"),
+        "squeeze": _get_action_handle("/actions/default/in/Squeeze"),
     }
 
-    print(f"[OpenVR] Action set '/actions/default' handle: {action_sets[0].ulActionSet}")
+    global input_source_handles
+    input_source_handles = {
+        "left": _get_input_source_handle("/user/hand/left"),
+        "right": _get_input_source_handle("/user/hand/right"),
+    }
+
+    print(f"[OpenVR] Action set handles: default={action_sets[0].ulActionSet} platformer={action_sets[1].ulActionSet}")
+    print(f"[OpenVR] Input source handles: left={input_source_handles.get('left')} right={input_source_handles.get('right')}")
     print(f"[OpenVR] Action handles: {action_handles}")
 
 
@@ -143,8 +169,8 @@ def _handle_input(ovr_context: OVRContext, input_state: dict[str, dict[str, floa
     ovr_context.l_input.middle_curl = float(left_state.get("middle_curl", 0.0))
     ovr_context.l_input.ring_curl = float(left_state.get("ring_curl", 0.0))
     ovr_context.l_input.pinky_curl = float(left_state.get("pinky_curl", 0.0))
-    ovr_context.l_input.trigger_strength = 0.0
-    ovr_context.l_input.a_button = False
+    ovr_context.l_input.trigger_strength = float(left_state.get("squeeze", 0.0))
+    ovr_context.l_input.a_button = bool(left_state.get("click", 0.0))
     ovr_context.l_input.b_button = False
 
     ovr_context.r_input.thumb_curl = float(right_state.get("thumb_curl", 0.0))
@@ -152,8 +178,8 @@ def _handle_input(ovr_context: OVRContext, input_state: dict[str, dict[str, floa
     ovr_context.r_input.middle_curl = float(right_state.get("middle_curl", 0.0))
     ovr_context.r_input.ring_curl = float(right_state.get("ring_curl", 0.0))
     ovr_context.r_input.pinky_curl = float(right_state.get("pinky_curl", 0.0))
-    ovr_context.r_input.trigger_strength = 0.0
-    ovr_context.r_input.a_button = False
+    ovr_context.r_input.trigger_strength = float(right_state.get("squeeze", 0.0))
+    ovr_context.r_input.a_button = bool(right_state.get("click", 0.0))
     ovr_context.r_input.b_button = False
 
     channel_map = {
@@ -162,11 +188,15 @@ def _handle_input(ovr_context: OVRContext, input_state: dict[str, dict[str, floa
         "left_middle_curl": ovr_context.l_input.middle_curl,
         "left_ring_curl": ovr_context.l_input.ring_curl,
         "left_pinky_curl": ovr_context.l_input.pinky_curl,
+        "left_click": float(left_state.get("click", 0.0)),
+        "left_squeeze": float(left_state.get("squeeze", 0.0)),
         "right_thumb_curl": ovr_context.r_input.thumb_curl,
         "right_index_curl": ovr_context.r_input.index_curl,
         "right_middle_curl": ovr_context.r_input.middle_curl,
         "right_ring_curl": ovr_context.r_input.ring_curl,
         "right_pinky_curl": ovr_context.r_input.pinky_curl,
+        "right_click": float(right_state.get("click", 0.0)),
+        "right_squeeze": float(right_state.get("squeeze", 0.0)),
     }
 
     for channel, value in channel_map.items():
@@ -227,6 +257,60 @@ def _get_input(ovr_context: OVRContext) -> dict[str, dict[str, float]] | None:
             return 0.0
 
         return sum(curls) / len(curls)
+
+    def _get_digital_action(action_key: str, side: str) -> float:
+        action = action_handles.get(action_key)
+        if action is None:
+            return 0.0
+
+        get_digital_fn = getattr(vr_ipt, "getDigitalActionData", None) or getattr(vr_ipt, "GetDigitalActionData", None)
+        if not get_digital_fn:
+            return 0.0
+
+        source = input_source_handles.get(side, 0)
+        for read_call in (
+            lambda: get_digital_fn(action),
+            lambda: get_digital_fn(action, source),
+            lambda: get_digital_fn(action, int(source or 0)),
+        ):
+            try:
+                data = read_call()
+            except Exception:
+                continue
+            if isinstance(data, tuple) and data:
+                data = data[0]
+            if _safe_getattr_bool(data, "bState", False):
+                return 1.0
+            if _safe_getattr_bool(data, "bActive", False):
+                return 0.0
+        return 0.0
+
+    def _get_analog_action(action_key: str, side: str) -> float:
+        action = action_handles.get(action_key)
+        if action is None:
+            return 0.0
+
+        get_analog_fn = getattr(vr_ipt, "getAnalogActionData", None) or getattr(vr_ipt, "GetAnalogActionData", None)
+        if not get_analog_fn:
+            return 0.0
+
+        source = input_source_handles.get(side, 0)
+        for read_call in (
+            lambda: get_analog_fn(action),
+            lambda: get_analog_fn(action, source),
+            lambda: get_analog_fn(action, int(source or 0)),
+        ):
+            try:
+                data = read_call()
+            except Exception:
+                continue
+            if isinstance(data, tuple) and data:
+                data = data[0]
+            x = getattr(data, "x", None)
+            if x is None:
+                continue
+            return float(x)
+        return 0.0
 
     def _get_skeletal_finger_curls(action_key: str) -> dict[str, float] | None:
         action = action_handles.get(action_key)
@@ -340,6 +424,8 @@ def _get_input(ovr_context: OVRContext) -> dict[str, dict[str, float]] | None:
         "middle_curl": float((l_skeletal or {}).get("middle", previous_left["middle_curl"])),
         "ring_curl": float((l_skeletal or {}).get("ring", previous_left["ring_curl"])),
         "pinky_curl": float((l_skeletal or {}).get("pinky", previous_left["pinky_curl"])),
+        "click": _get_digital_action("jump", "left") if updated else previous_left["click"],
+        "squeeze": _get_analog_action("squeeze", "left") if updated else previous_left["squeeze"],
     }
     right_data = {
         "thumb_curl": float((r_skeletal or {}).get("thumb", previous_right["thumb_curl"])),
@@ -347,6 +433,8 @@ def _get_input(ovr_context: OVRContext) -> dict[str, dict[str, float]] | None:
         "middle_curl": float((r_skeletal or {}).get("middle", previous_right["middle_curl"])),
         "ring_curl": float((r_skeletal or {}).get("ring", previous_right["ring_curl"])),
         "pinky_curl": float((r_skeletal or {}).get("pinky", previous_right["pinky_curl"])),
+        "click": _get_digital_action("jump", "right") if updated else previous_right["click"],
+        "squeeze": _get_analog_action("squeeze", "right") if updated else previous_right["squeeze"],
     }
 
     return {"left": left_data, "right": right_data}
@@ -624,11 +712,15 @@ def _insert_action(ovr_context: OVRContext):
             "left_middle_curl": [],
             "left_ring_curl": [],
             "left_pinky_curl": [],
+            "left_click": [],
+            "left_squeeze": [],
             "right_thumb_curl": [],
             "right_index_curl": [],
             "right_middle_curl": [],
             "right_ring_curl": [],
             "right_pinky_curl": [],
+            "right_click": [],
+            "right_squeeze": [],
         }
 
         for sample_time, sample_values in input_data:
@@ -644,11 +736,15 @@ def _insert_action(ovr_context: OVRContext):
             input_channels["left_middle_curl"].append(left_values.get("middle_curl", 0.0))
             input_channels["left_ring_curl"].append(left_values.get("ring_curl", 0.0))
             input_channels["left_pinky_curl"].append(left_values.get("pinky_curl", 0.0))
+            input_channels["left_click"].append(left_values.get("click", 0.0))
+            input_channels["left_squeeze"].append(left_values.get("squeeze", 0.0))
             input_channels["right_thumb_curl"].append(right_values.get("thumb_curl", 0.0))
             input_channels["right_index_curl"].append(right_values.get("index_curl", 0.0))
             input_channels["right_middle_curl"].append(right_values.get("middle_curl", 0.0))
             input_channels["right_ring_curl"].append(right_values.get("ring_curl", 0.0))
             input_channels["right_pinky_curl"].append(right_values.get("pinky_curl", 0.0))
+            input_channels["right_click"].append(right_values.get("click", 0.0))
+            input_channels["right_squeeze"].append(right_values.get("squeeze", 0.0))
 
         for channel, values in input_channels.items():
             if channel not in root_obj:

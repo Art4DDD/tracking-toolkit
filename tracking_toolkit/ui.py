@@ -103,6 +103,8 @@ class RecorderPanel(View3DPanel, bpy.types.Panel):
                 ("middle_curl", "Middle"),
                 ("ring_curl", "Ring"),
                 ("pinky_curl", "Pinky"),
+                ("click", "Click"),
+                ("squeeze", "Squeeze"),
             ):
                 channel = f"{prefix}_{suffix}"
                 if channel not in root_obj:
