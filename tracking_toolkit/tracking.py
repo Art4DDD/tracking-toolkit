@@ -33,9 +33,9 @@ latest_input_state = {
     "right": {channel: 0.0 for channel in (*FINGER_CHANNELS, *ACTION_CHANNELS)},
 }
 CLICK_ACTION_THRESHOLD = 0.5
-CLICK_TOGGLE_COOLDOWN_SEC = 0.6
+CLICK_RELEASE_DEBOUNCE_SEC = 0.12
 click_combo_latched = False
-click_last_toggle_time = 0.0
+click_release_started_at = None
 
 FINGER_BONE_CHAINS = {
     "thumb": (2, 3, 4, 5),
@@ -848,7 +848,7 @@ def end_recording_session(ovr_context: OVRContext, emit_haptic: bool = True):
 
 
 def _maybe_toggle_recording_from_click(ovr_context: OVRContext, input_state: dict[str, dict[str, float]]):
-    global click_combo_latched, click_last_toggle_time
+    global click_combo_latched, click_release_started_at
 
     left_click = float(input_state.get("left", {}).get("click", 0.0)) >= CLICK_ACTION_THRESHOLD
     right_click = float(input_state.get("right", {}).get("click", 0.0)) >= CLICK_ACTION_THRESHOLD
@@ -857,16 +857,23 @@ def _maybe_toggle_recording_from_click(ovr_context: OVRContext, input_state: dic
     now = time.monotonic()
 
     if both_click:
+        click_release_started_at = None
         if click_combo_latched:
             return
-        if (now - click_last_toggle_time) < CLICK_TOGGLE_COOLDOWN_SEC:
-            return
         click_combo_latched = True
-        click_last_toggle_time = now
-    elif not left_click and not right_click:
-        click_combo_latched = False
+    elif click_combo_latched:
+        if not left_click and not right_click:
+            if click_release_started_at is None:
+                click_release_started_at = now
+                return
+            if (now - click_release_started_at) >= CLICK_RELEASE_DEBOUNCE_SEC:
+                click_combo_latched = False
+                click_release_started_at = None
+        else:
+            click_release_started_at = None
         return
     else:
+        click_release_started_at = None
         return
 
     if ovr_context.recording:
@@ -876,15 +883,13 @@ def _maybe_toggle_recording_from_click(ovr_context: OVRContext, input_state: dic
 
 
 def start_preview(ovr_context: OVRContext):
-    global polling_thread, stop_thread_flag, click_combo_latched, click_last_toggle_time
+    global polling_thread, stop_thread_flag
 
     if polling_thread and polling_thread.is_alive():
         stop_thread_flag.set()
         polling_thread.join()
 
     stop_thread_flag.clear()
-    click_combo_latched = False
-    click_last_toggle_time = 0.0
     polling_thread = threading.Thread(target=lambda: _openvr_poll_thread_func(ovr_context))
     polling_thread.daemon = True  # Quit with Blender
     polling_thread.start()
@@ -896,7 +901,7 @@ def start_preview(ovr_context: OVRContext):
 
 
 def stop_preview():
-    global polling_thread, stop_thread_flag, preview_buffer, click_combo_latched, click_last_toggle_time
+    global polling_thread, stop_thread_flag, preview_buffer
 
     if bpy.app.timers.is_registered(_pose_vis_timer):
         bpy.app.timers.unregister(_pose_vis_timer)
@@ -910,8 +915,6 @@ def stop_preview():
 
     polling_thread = None
     stop_thread_flag.clear()
-    click_combo_latched = False
-    click_last_toggle_time = 0.0
 
     print("OpenVR Preview Stopped")
 
