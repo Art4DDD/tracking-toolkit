@@ -162,8 +162,11 @@ def init_handles():
     print(f"[OpenVR] Action handles: {action_handles}")
 
 
-def _trigger_haptic_feedback(duration: float = 0.05, frequency: float = 120.0, amplitude: float = 0.7):
+def _trigger_haptic_feedback(duration: float = 0.15, frequency: float = 120.0, amplitude: float = 1.0):
     haptic_action = action_handles.get("haptic")
+    if not haptic_action:
+        init_handles()
+        haptic_action = action_handles.get("haptic")
     if not haptic_action:
         return
 
@@ -172,17 +175,85 @@ def _trigger_haptic_feedback(duration: float = 0.05, frequency: float = 120.0, a
     if not trigger_fn:
         return
 
-    for side in ("left", "right"):
-        source = int(input_source_handles.get(side, 0) or 0)
-        for trigger_call in (
-            lambda: trigger_fn(haptic_action, 0.0, duration, frequency, amplitude, source),
-            lambda: trigger_fn(haptic_action, 0.0, duration, frequency, amplitude),
-        ):
+    def _is_success(result) -> bool:
+        if result is None:
+            return True
+        if isinstance(result, tuple):
+            return any((isinstance(value, int) and value == 0) for value in result) or not any(isinstance(value, int) for value in result)
+        if isinstance(result, int):
+            return result == 0
+        return True
+
+    def _resolve_source_handle(side: str) -> int:
+        get_source_fn = getattr(vr_ipt, "getInputSourceHandle", None) or getattr(vr_ipt, "GetInputSourceHandle", None)
+        if get_source_fn:
+            source_path = f"/user/hand/{side}"
+            for variant in (source_path, source_path.lower()):
+                try:
+                    handle = get_source_fn(variant)
+                except Exception:
+                    continue
+                if isinstance(handle, tuple):
+                    handle = next((value for value in reversed(handle) if isinstance(value, int)), 0)
+                if handle:
+                    return int(handle)
+        return int(input_source_handles.get(side, 0) or 0)
+
+    def _trigger_action_haptic(side: str) -> bool:
+        source = _resolve_source_handle(side)
+        if source:
+            for trigger_call in (
+                lambda: trigger_fn(int(haptic_action), 0.0, duration, frequency, amplitude, source),
+                lambda: trigger_fn(int(haptic_action), 0, duration, frequency, amplitude, source),
+            ):
+                try:
+                    if _is_success(trigger_call()):
+                        return True
+                except Exception:
+                    continue
+        return False
+
+    def _trigger_legacy_pulse(side: str) -> bool:
+        try:
+            system = openvr.VRSystem()
+        except Exception:
+            return False
+
+        pulse_fn = getattr(system, "triggerHapticPulse", None) or getattr(system, "TriggerHapticPulse", None)
+        if not pulse_fn:
+            return False
+
+        target_role = getattr(openvr, "TrackedControllerRole_LeftHand", 1) if side == "left" else getattr(openvr, "TrackedControllerRole_RightHand", 2)
+        max_devices = getattr(openvr, "k_unMaxTrackedDeviceCount", 16)
+        pulse_strength = max(0.1, min(1.0, float(amplitude)))
+        pulse_duration_us = int(max(100, min(3999, duration * 1_000_000 * pulse_strength)))
+
+        for device_idx in range(max_devices):
             try:
-                trigger_call()
-                break
+                if not bool(system.isTrackedDeviceConnected(device_idx)):
+                    continue
+                if system.getTrackedDeviceClass(device_idx) != openvr.TrackedDeviceClass_Controller:
+                    continue
+                role = system.getInt32TrackedDeviceProperty(device_idx, openvr.Prop_ControllerRoleHint_Int32)
             except Exception:
                 continue
+
+            if role != target_role:
+                continue
+
+            for axis_id in (0, 1):
+                try:
+                    pulse_fn(device_idx, axis_id, pulse_duration_us)
+                    return True
+                except Exception:
+                    continue
+
+        return False
+
+    for side in ("left", "right"):
+        if _trigger_action_haptic(side):
+            continue
+        _trigger_legacy_pulse(side)
 
 
 def _handle_input(ovr_context: OVRContext, input_state: dict[str, dict[str, float]]):
