@@ -80,11 +80,11 @@
          "chords" : [],
          "haptics" : [
             {
-               "output" : "/actions/default/out/haptic",
+               "output" : "/actions/default/out/Haptic",
                "path" : "/user/hand/left/output/haptic"
             },
             {
-               "output" : "/actions/default/out/haptic",
+               "output" : "/actions/default/out/Haptic",
                "path" : "/user/hand/right/output/haptic"
             }
          ],

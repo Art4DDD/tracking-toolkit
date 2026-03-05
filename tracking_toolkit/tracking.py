@@ -22,6 +22,7 @@ preview_buffer = []
 record_buffer = []
 input_record_buffer = []
 buffer_lock = threading.Lock()
+vr_input_lock = threading.RLock()
 recording_active = False
 action_sets = []
 action_handles = {}
@@ -47,6 +48,33 @@ FINGER_BONE_CHAINS = {
 
 
 
+
+
+def _extract_handle_int(value) -> int:
+    if isinstance(value, tuple):
+        int_values = [int(candidate) for candidate in value if isinstance(candidate, int)]
+        if not int_values:
+            return 0
+
+        if len(int_values) >= 2:
+            first, second = int_values[0], int_values[1]
+            if abs(first) <= 1024 and second != 0:
+                return int(second)
+            if abs(second) <= 1024 and first != 0:
+                return int(first)
+
+        for candidate in reversed(int_values):
+            if candidate > 4096:
+                return int(candidate)
+
+        for candidate in reversed(int_values):
+            if candidate != 0:
+                return int(candidate)
+        return 0
+    try:
+        return int(value or 0)
+    except Exception:
+        return 0
 
 
 def _ensure_finger_properties(target_obj: bpy.types.Object):
@@ -91,22 +119,13 @@ def _get_or_create_root_object() -> bpy.types.Object:
 def init_handles():
     vr_ipt = openvr.VRInput()
 
-    def _unwrap_handle(value):
-        if isinstance(value, tuple):
-            if not value:
-                return None
-            for candidate in reversed(value):
-                if isinstance(candidate, int):
-                    return candidate
-            return None
-        return value
-
     def _get_action_set_handle(action_set_path: str):
         get_set_fn = getattr(vr_ipt, "getActionSetHandle", None) or getattr(vr_ipt, "GetActionSetHandle", None)
         if not get_set_fn:
             return None
         try:
-            return _unwrap_handle(get_set_fn(action_set_path))
+            handle = _extract_handle_int(get_set_fn(action_set_path))
+            return handle or None
         except Exception:
             return None
 
@@ -117,7 +136,7 @@ def init_handles():
         variants = [action_path, action_path.lower()]
         for variant in variants:
             try:
-                handle = _unwrap_handle(get_action_fn(variant))
+                handle = _extract_handle_int(get_action_fn(variant))
             except Exception:
                 continue
             if handle:
@@ -130,130 +149,123 @@ def init_handles():
             return 0
         for variant in (source_path, source_path.lower()):
             try:
-                handle = _unwrap_handle(get_source_fn(variant))
+                handle = _extract_handle_int(get_source_fn(variant))
             except Exception:
                 continue
             if handle:
                 return int(handle)
         return 0
 
-    global action_sets
-    default_action_set_handle = _get_action_set_handle("/actions/default")
-    action_sets = (openvr.VRActiveActionSet_t * 1)()
-    action_sets[0].ulActionSet = int(default_action_set_handle or 0)
+    with vr_input_lock:
+        global action_sets
+        default_action_set_handle = _get_action_set_handle("/actions/default")
+        action_sets = (openvr.VRActiveActionSet_t * 1)()
+        action_sets[0].ulActionSet = int(default_action_set_handle or 0)
 
-    global action_handles
-    action_handles = {
-        "l_skeleton": _get_action_handle("/actions/default/in/SkeletonLeftHand"),
-        "r_skeleton": _get_action_handle("/actions/default/in/SkeletonRightHand"),
-        "click": _get_action_handle("/actions/default/in/Click"),
-        "squeeze": _get_action_handle("/actions/default/in/Squeeze"),
-        "haptic": _get_action_handle("/actions/default/out/Haptic"),
-    }
+        global action_handles
+        action_handles = {
+            "l_skeleton": _get_action_handle("/actions/default/in/SkeletonLeftHand"),
+            "r_skeleton": _get_action_handle("/actions/default/in/SkeletonRightHand"),
+            "click": _get_action_handle("/actions/default/in/Click"),
+            "squeeze": _get_action_handle("/actions/default/in/Squeeze"),
+            "haptic": _get_action_handle("/actions/default/out/Haptic"),
+        }
 
-    global input_source_handles
-    input_source_handles = {
-        "left": _get_input_source_handle("/user/hand/left"),
-        "right": _get_input_source_handle("/user/hand/right"),
-    }
+        global input_source_handles
+        input_source_handles = {
+            "left": _get_input_source_handle("/user/hand/left"),
+            "right": _get_input_source_handle("/user/hand/right"),
+        }
 
     print(f"[OpenVR] Action set '/actions/default' handle: {action_sets[0].ulActionSet}")
     print(f"[OpenVR] Input source handles: left={input_source_handles.get('left')} right={input_source_handles.get('right')}")
     print(f"[OpenVR] Action handles: {action_handles}")
 
 
-def _trigger_haptic_feedback(duration: float = 0.15, frequency: float = 120.0, amplitude: float = 1.0):
-    haptic_action = action_handles.get("haptic")
-    if not haptic_action:
-        init_handles()
+def _trigger_haptic_feedback(
+        duration: float = 0.15,
+        frequency: float = 120.0,
+        amplitude: float = 1.0,
+        pulses: int = 1,
+        pulse_gap: float = 0.07,
+):
+    with vr_input_lock:
         haptic_action = action_handles.get("haptic")
-    if not haptic_action:
-        return
+        if not haptic_action:
+            init_handles()
+            haptic_action = action_handles.get("haptic")
+        if not haptic_action:
+            return
 
-    vr_ipt = openvr.VRInput()
-    trigger_fn = getattr(vr_ipt, "triggerHapticVibrationAction", None) or getattr(vr_ipt, "TriggerHapticVibrationAction", None)
-    if not trigger_fn:
-        return
+        vr_ipt = openvr.VRInput()
+        trigger_fn = getattr(vr_ipt, "triggerHapticVibrationAction", None) or getattr(vr_ipt, "TriggerHapticVibrationAction", None)
+        if not trigger_fn:
+            return
 
-    def _is_success(result) -> bool:
-        if result is None:
-            return True
-        if isinstance(result, tuple):
-            return any((isinstance(value, int) and value == 0) for value in result) or not any(isinstance(value, int) for value in result)
-        if isinstance(result, int):
-            return result == 0
-        return True
-
-    def _resolve_source_handle(side: str) -> int:
         get_source_fn = getattr(vr_ipt, "getInputSourceHandle", None) or getattr(vr_ipt, "GetInputSourceHandle", None)
-        if get_source_fn:
-            source_path = f"/user/hand/{side}"
-            for variant in (source_path, source_path.lower()):
-                try:
-                    handle = get_source_fn(variant)
-                except Exception:
-                    continue
-                if isinstance(handle, tuple):
-                    handle = next((value for value in reversed(handle) if isinstance(value, int)), 0)
-                if handle:
-                    return int(handle)
-        return int(input_source_handles.get(side, 0) or 0)
 
-    def _trigger_action_haptic(side: str) -> bool:
-        source = _resolve_source_handle(side)
-        if source:
-            for trigger_call in (
-                lambda: trigger_fn(int(haptic_action), 0.0, duration, frequency, amplitude, source),
-                lambda: trigger_fn(int(haptic_action), 0, duration, frequency, amplitude, source),
-            ):
-                try:
-                    if _is_success(trigger_call()):
-                        return True
-                except Exception:
-                    continue
-        return False
+        def _is_success(result) -> bool:
+            if result is None:
+                return True
+            if isinstance(result, tuple):
+                int_values = [value for value in result if isinstance(value, int)]
+                return (0 in int_values) if int_values else True
+            if isinstance(result, int):
+                return result == 0
+            return True
 
-    def _trigger_legacy_pulse(side: str) -> bool:
-        try:
-            system = openvr.VRSystem()
-        except Exception:
-            return False
+        def _resolve_source_handle(side: str) -> int:
+            if get_source_fn:
+                source_path = f"/user/hand/{side}"
+                for variant in (source_path, source_path.lower()):
+                    try:
+                        handle = _extract_handle_int(get_source_fn(variant))
+                    except Exception:
+                        continue
+                    if handle:
+                        return int(handle)
+            source = int(input_source_handles.get(side, 0) or 0)
+            return source if source > 0 else 0
 
-        pulse_fn = getattr(system, "triggerHapticPulse", None) or getattr(system, "TriggerHapticPulse", None)
-        if not pulse_fn:
-            return False
+        pulse_count = max(1, int(pulses))
+        clamped_amplitude = max(0.0, min(1.0, float(amplitude)))
 
-        target_role = getattr(openvr, "TrackedControllerRole_LeftHand", 1) if side == "left" else getattr(openvr, "TrackedControllerRole_RightHand", 2)
-        max_devices = getattr(openvr, "k_unMaxTrackedDeviceCount", 16)
-        pulse_strength = max(0.1, min(1.0, float(amplitude)))
-        pulse_duration_us = int(max(100, min(3999, duration * 1_000_000 * pulse_strength)))
+        for side in ("left", "right"):
+            success = False
+            source = _resolve_source_handle(side)
+            for attempt in range(2):
+                if attempt == 1:
+                    init_handles()
+                    haptic_action = action_handles.get("haptic") or haptic_action
+                    source = _resolve_source_handle(side)
 
-        for device_idx in range(max_devices):
-            try:
-                if not bool(system.isTrackedDeviceConnected(device_idx)):
-                    continue
-                if system.getTrackedDeviceClass(device_idx) != openvr.TrackedDeviceClass_Controller:
-                    continue
-                role = system.getInt32TrackedDeviceProperty(device_idx, openvr.Prop_ControllerRoleHint_Int32)
-            except Exception:
-                continue
-
-            if role != target_role:
-                continue
-
-            for axis_id in (0, 1):
-                try:
-                    pulse_fn(device_idx, axis_id, pulse_duration_us)
-                    return True
-                except Exception:
+                if not haptic_action or not source:
                     continue
 
-        return False
+                all_pulses_ok = True
+                for pulse_idx in range(pulse_count):
+                    start_offset = pulse_idx * float(pulse_gap)
+                    pulse_ok = False
+                    for call in (
+                        lambda src=source, offs=start_offset: trigger_fn(int(haptic_action), float(offs), duration, frequency, clamped_amplitude, int(src)),
+                    ):
+                        try:
+                            result = call()
+                        except Exception:
+                            continue
+                        if _is_success(result):
+                            pulse_ok = True
+                            break
+                    if not pulse_ok:
+                        all_pulses_ok = False
+                        break
 
-    for side in ("left", "right"):
-        if _trigger_action_haptic(side):
-            continue
-        _trigger_legacy_pulse(side)
+                if all_pulses_ok:
+                    success = True
+                    break
+
+            if not success:
+                print(f"[OpenVR] Haptic send failed for {side} (source={source})")
 
 
 def _handle_input(ovr_context: OVRContext, input_state: dict[str, dict[str, float]]):
@@ -307,27 +319,26 @@ def _get_input(ovr_context: OVRContext) -> dict[str, dict[str, float]] | None:
     vr_ipt = openvr.VRInput()
 
     updated = False
-    if action_handles and action_sets:
-        update_fn = getattr(vr_ipt, "updateActionState", None) or getattr(vr_ipt, "UpdateActionState", None)
-        update_variants = []
-        if update_fn:
-            update_variants = [
-                lambda: update_fn(action_sets, ctypes.sizeof(openvr.VRActiveActionSet_t), len(action_sets)),
-                lambda: update_fn(action_sets),
-                lambda: update_fn(action_sets[0], ctypes.sizeof(openvr.VRActiveActionSet_t), 1),
-            ]
-
-        last_update_error = None
-        for update_call in update_variants:
-            try:
-                update_call()
-                updated = True
-                break
-            except Exception as e:
-                last_update_error = e
-                continue
-        if not updated:
-            print(f"[OpenVR] updateActionState failed for all variants: {last_update_error}")
+    with vr_input_lock:
+        if action_handles and action_sets:
+            update_fn = getattr(vr_ipt, "updateActionState", None) or getattr(vr_ipt, "UpdateActionState", None)
+            if update_fn:
+                update_variants = [
+                    lambda: update_fn(action_sets, ctypes.sizeof(openvr.VRActiveActionSet_t), len(action_sets)),
+                    lambda: update_fn(action_sets),
+                    lambda: update_fn(action_sets[0], ctypes.sizeof(openvr.VRActiveActionSet_t), 1),
+                ]
+                last_update_error = None
+                for update_call in update_variants:
+                    try:
+                        update_call()
+                        updated = True
+                        break
+                    except Exception as e:
+                        last_update_error = e
+                        continue
+                if not updated:
+                    print(f"[OpenVR] updateActionState failed for all variants: {last_update_error}")
 
     def _calc_finger_curl(bone_transforms, chain: tuple[int, ...]) -> float:
         if len(chain) < 2:
@@ -365,16 +376,17 @@ def _get_input(ovr_context: OVRContext) -> dict[str, dict[str, float]] | None:
         if not get_digital_fn:
             return 0.0
 
-        source = input_source_handles.get(side, 0)
+        source = int(input_source_handles.get(side, 0) or 0)
         for read_call in (
-            lambda: get_digital_fn(action),
             lambda: get_digital_fn(action, source),
+            lambda: get_digital_fn(action),
             lambda: get_digital_fn(action, int(source or 0)),
         ):
             try:
                 data = read_call()
             except Exception:
                 continue
+
             if isinstance(data, tuple) and data:
                 data = data[0]
             if _safe_getattr_bool(data, "bState", False):
@@ -392,16 +404,17 @@ def _get_input(ovr_context: OVRContext) -> dict[str, dict[str, float]] | None:
         if not get_analog_fn:
             return 0.0
 
-        source = input_source_handles.get(side, 0)
+        source = int(input_source_handles.get(side, 0) or 0)
         for read_call in (
-            lambda: get_analog_fn(action),
             lambda: get_analog_fn(action, source),
+            lambda: get_analog_fn(action),
             lambda: get_analog_fn(action, int(source or 0)),
         ):
             try:
                 data = read_call()
             except Exception:
                 continue
+
             if isinstance(data, tuple) and data:
                 data = data[0]
             x = getattr(data, "x", None)
@@ -485,7 +498,6 @@ def _get_input(ovr_context: OVRContext) -> dict[str, dict[str, float]] | None:
             lambda: get_bone_data_fn(action, transform_space, motion_range, bone_count),
             lambda: get_bone_data_fn(action, transform_space, motion_range, None, bone_count),
         ]
-
         for bone_call in bone_variants:
             try:
                 bone_transforms = bone_call()
@@ -508,12 +520,17 @@ def _get_input(ovr_context: OVRContext) -> dict[str, dict[str, float]] | None:
             return None
         return result
 
-    l_skeletal = _get_skeletal_finger_curls("l_skeleton") if updated else None
-    r_skeletal = _get_skeletal_finger_curls("r_skeleton") if updated else None
-
     with buffer_lock:
         previous_left = latest_input_state["left"].copy()
         previous_right = latest_input_state["right"].copy()
+
+    with vr_input_lock:
+        l_skeletal = _get_skeletal_finger_curls("l_skeleton") if updated else None
+        r_skeletal = _get_skeletal_finger_curls("r_skeleton") if updated else None
+        left_click = _get_digital_action("click", "left") if updated else previous_left["click"]
+        left_squeeze = _get_analog_action("squeeze", "left") if updated else previous_left["squeeze"]
+        right_click = _get_digital_action("click", "right") if updated else previous_right["click"]
+        right_squeeze = _get_analog_action("squeeze", "right") if updated else previous_right["squeeze"]
 
 
     left_data = {
@@ -522,8 +539,8 @@ def _get_input(ovr_context: OVRContext) -> dict[str, dict[str, float]] | None:
         "middle_curl": float((l_skeletal or {}).get("middle", previous_left["middle_curl"])),
         "ring_curl": float((l_skeletal or {}).get("ring", previous_left["ring_curl"])),
         "pinky_curl": float((l_skeletal or {}).get("pinky", previous_left["pinky_curl"])),
-        "click": _get_digital_action("click", "left") if updated else previous_left["click"],
-        "squeeze": _get_analog_action("squeeze", "left") if updated else previous_left["squeeze"],
+        "click": left_click,
+        "squeeze": left_squeeze,
     }
     right_data = {
         "thumb_curl": float((r_skeletal or {}).get("thumb", previous_right["thumb_curl"])),
@@ -531,8 +548,8 @@ def _get_input(ovr_context: OVRContext) -> dict[str, dict[str, float]] | None:
         "middle_curl": float((r_skeletal or {}).get("middle", previous_right["middle_curl"])),
         "ring_curl": float((r_skeletal or {}).get("ring", previous_right["ring_curl"])),
         "pinky_curl": float((r_skeletal or {}).get("pinky", previous_right["pinky_curl"])),
-        "click": _get_digital_action("click", "right") if updated else previous_right["click"],
-        "squeeze": _get_analog_action("squeeze", "right") if updated else previous_right["squeeze"],
+        "click": right_click,
+        "squeeze": right_squeeze,
     }
 
     return {"left": left_data, "right": right_data}
@@ -915,7 +932,7 @@ def end_recording_session(ovr_context: OVRContext, emit_haptic: bool = True):
     ovr_context.recording = False
     stop_recording(ovr_context)
     if emit_haptic:
-        _trigger_haptic_feedback()
+        _trigger_haptic_feedback(pulses=2)
 
 
 def _maybe_toggle_recording_from_click(ovr_context: OVRContext, input_state: dict[str, dict[str, float]]):
