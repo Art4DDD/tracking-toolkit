@@ -1040,9 +1040,27 @@ def load_trackers(ovr_context: OVRContext):
             continue
 
         tracker_serial = system.getStringTrackedDeviceProperty(i, openvr.Prop_SerialNumber_String)
+        name_suffix = ""
+        if device_class == openvr.TrackedDeviceClass_HMD:
+            name_suffix = " (HMD)"
+        elif device_class == openvr.TrackedDeviceClass_Controller:
+            try:
+                role_hint = system.getInt32TrackedDeviceProperty(i, openvr.Prop_ControllerRoleHint_Int32)
+            except Exception:
+                role_hint = None
+            if role_hint == getattr(openvr, "TrackedControllerRole_LeftHand", 1):
+                name_suffix = " (Left)"
+            elif role_hint == getattr(openvr, "TrackedControllerRole_RightHand", 2):
+                name_suffix = " (Right)"
+        elif device_class == openvr.TrackedDeviceClass_TrackingReference:
+            name_suffix = " (LH)"
+        elif device_class == openvr.TrackedDeviceClass_GenericTracker:
+            name_suffix = " (Tracker)"
+
+        tracker_name = f"{tracker_serial}{name_suffix}" if tracker_serial else f"Device {i}{name_suffix}"
         tracker = ovr_context.trackers.add()
-        tracker.name = tracker_serial
-        tracker.prev_name = tracker_serial
+        tracker.name = tracker_name
+        tracker.prev_name = tracker_name
         tracker.serial = tracker_serial
         tracker.type = str(device_class)
         tracker.index = i
