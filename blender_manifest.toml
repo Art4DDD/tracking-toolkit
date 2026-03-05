@@ -1,7 +1,7 @@
 schema_version = "1.0.0"
 
 id = "tracking_toolkit"
-version = "1.2.0"
+version = "1.2.5"
 name = "Tracking Toolkit"
 tagline = "Use OpenVR trackers and devices directly in Blender"
 maintainer = "Ethan Porcaro <ethan@varrett.com>"
