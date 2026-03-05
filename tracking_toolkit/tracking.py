@@ -2,6 +2,7 @@ import datetime
 import ctypes
 import queue
 import threading
+import time
 from typing import Generator
 
 import bpy
@@ -31,6 +32,10 @@ latest_input_state = {
     "left": {channel: 0.0 for channel in (*FINGER_CHANNELS, *ACTION_CHANNELS)},
     "right": {channel: 0.0 for channel in (*FINGER_CHANNELS, *ACTION_CHANNELS)},
 }
+CLICK_ACTION_THRESHOLD = 0.5
+CLICK_TOGGLE_COOLDOWN_SEC = 0.6
+click_combo_latched = False
+click_last_toggle_time = 0.0
 
 FINGER_BONE_CHAINS = {
     "thumb": (2, 3, 4, 5),
@@ -143,6 +148,7 @@ def init_handles():
         "r_skeleton": _get_action_handle("/actions/default/in/SkeletonRightHand"),
         "click": _get_action_handle("/actions/default/in/Click"),
         "squeeze": _get_action_handle("/actions/default/in/Squeeze"),
+        "haptic": _get_action_handle("/actions/default/out/Haptic"),
     }
 
     global input_source_handles
@@ -154,6 +160,29 @@ def init_handles():
     print(f"[OpenVR] Action set '/actions/default' handle: {action_sets[0].ulActionSet}")
     print(f"[OpenVR] Input source handles: left={input_source_handles.get('left')} right={input_source_handles.get('right')}")
     print(f"[OpenVR] Action handles: {action_handles}")
+
+
+def _trigger_haptic_feedback(duration: float = 0.05, frequency: float = 120.0, amplitude: float = 0.7):
+    haptic_action = action_handles.get("haptic")
+    if not haptic_action:
+        return
+
+    vr_ipt = openvr.VRInput()
+    trigger_fn = getattr(vr_ipt, "triggerHapticVibrationAction", None) or getattr(vr_ipt, "TriggerHapticVibrationAction", None)
+    if not trigger_fn:
+        return
+
+    for side in ("left", "right"):
+        source = int(input_source_handles.get(side, 0) or 0)
+        for trigger_call in (
+            lambda: trigger_fn(haptic_action, 0.0, duration, frequency, amplitude, source),
+            lambda: trigger_fn(haptic_action, 0.0, duration, frequency, amplitude),
+        ):
+            try:
+                trigger_call()
+                break
+            except Exception:
+                continue
 
 
 def _handle_input(ovr_context: OVRContext, input_state: dict[str, dict[str, float]]):
@@ -567,6 +596,7 @@ def _pose_vis_timer():
                 "right": latest_input_state["right"].copy(),
             }
         _handle_input(ovr_context, input_state)
+        _maybe_toggle_recording_from_click(ovr_context, input_state)
 
     return 1.0 / 60  # 60hz
 
@@ -778,6 +808,21 @@ def start_recording():
     print("OpenVR Recording Started")
 
 
+def begin_recording_session(ovr_context: OVRContext, emit_haptic: bool = True):
+    if not ovr_context.enabled or ovr_context.recording:
+        return
+
+    scene = getattr(bpy.context, "scene", None)
+    if scene:
+        ovr_context.record_start_frame = scene.frame_current
+
+    ovr_context.recording = True
+    start_preview(ovr_context)
+    start_recording()
+    if emit_haptic:
+        _trigger_haptic_feedback()
+
+
 def stop_recording(ovr_context: OVRContext | None):
     global recording_active
 
@@ -792,14 +837,54 @@ def stop_recording(ovr_context: OVRContext | None):
     print("OpenVR Recording Stopped")
 
 
+def end_recording_session(ovr_context: OVRContext, emit_haptic: bool = True):
+    if not ovr_context.enabled or not ovr_context.recording:
+        return
+
+    ovr_context.recording = False
+    stop_recording(ovr_context)
+    if emit_haptic:
+        _trigger_haptic_feedback()
+
+
+def _maybe_toggle_recording_from_click(ovr_context: OVRContext, input_state: dict[str, dict[str, float]]):
+    global click_combo_latched, click_last_toggle_time
+
+    left_click = float(input_state.get("left", {}).get("click", 0.0)) >= CLICK_ACTION_THRESHOLD
+    right_click = float(input_state.get("right", {}).get("click", 0.0)) >= CLICK_ACTION_THRESHOLD
+
+    both_click = left_click and right_click
+    now = time.monotonic()
+
+    if both_click:
+        if click_combo_latched:
+            return
+        if (now - click_last_toggle_time) < CLICK_TOGGLE_COOLDOWN_SEC:
+            return
+        click_combo_latched = True
+        click_last_toggle_time = now
+    elif not left_click and not right_click:
+        click_combo_latched = False
+        return
+    else:
+        return
+
+    if ovr_context.recording:
+        end_recording_session(ovr_context, emit_haptic=True)
+    else:
+        begin_recording_session(ovr_context, emit_haptic=True)
+
+
 def start_preview(ovr_context: OVRContext):
-    global polling_thread, stop_thread_flag
+    global polling_thread, stop_thread_flag, click_combo_latched, click_last_toggle_time
 
     if polling_thread and polling_thread.is_alive():
         stop_thread_flag.set()
         polling_thread.join()
 
     stop_thread_flag.clear()
+    click_combo_latched = False
+    click_last_toggle_time = 0.0
     polling_thread = threading.Thread(target=lambda: _openvr_poll_thread_func(ovr_context))
     polling_thread.daemon = True  # Quit with Blender
     polling_thread.start()
@@ -811,7 +896,7 @@ def start_preview(ovr_context: OVRContext):
 
 
 def stop_preview():
-    global polling_thread, stop_thread_flag, preview_buffer
+    global polling_thread, stop_thread_flag, preview_buffer, click_combo_latched, click_last_toggle_time
 
     if bpy.app.timers.is_registered(_pose_vis_timer):
         bpy.app.timers.unregister(_pose_vis_timer)
@@ -825,6 +910,8 @@ def stop_preview():
 
     polling_thread = None
     stop_thread_flag.clear()
+    click_combo_latched = False
+    click_last_toggle_time = 0.0
 
     print("OpenVR Preview Stopped")
 

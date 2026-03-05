@@ -4,7 +4,7 @@ from mathutils import Matrix, Vector
 from pathlib import Path
 
 from .properties import Preferences, OVRContext, OVRTracker
-from .tracking import _get_poses, load_trackers, start_recording, stop_recording, start_preview, stop_preview, init_handles
+from .tracking import _get_poses, load_trackers, begin_recording_session, end_recording_session, start_preview, stop_preview, init_handles
 from .. import __package__ as base_package
 
 
@@ -79,13 +79,11 @@ class ToggleRecordOperator(bpy.types.Operator):
         if not ovr_context.enabled:
             return {"FINISHED"}
 
-        ovr_context.recording = not ovr_context.recording
         if ovr_context.recording:
-            ovr_context.record_start_frame = context.scene.frame_current
-            start_preview(ovr_context)
-            start_recording()
-        else:
-            stop_recording(ovr_context)
+            end_recording_session(ovr_context, emit_haptic=True)
+            return {"FINISHED"}
+
+        begin_recording_session(ovr_context, emit_haptic=True)
 
         return {"FINISHED"}
 
