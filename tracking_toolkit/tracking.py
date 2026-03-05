@@ -268,6 +268,22 @@ def _trigger_haptic_feedback(
                 print(f"[OpenVR] Haptic send failed for {side} (source={source})")
 
 
+def _trigger_haptic_feedback_later(
+        delay: float,
+        duration: float = 0.15,
+        frequency: float = 120.0,
+        amplitude: float = 1.0,
+):
+    def _timer_callback():
+        _trigger_haptic_feedback(duration=duration, frequency=frequency, amplitude=amplitude)
+        return None
+
+    try:
+        bpy.app.timers.register(_timer_callback, first_interval=max(0.0, float(delay)))
+    except Exception as e:
+        print(f"[OpenVR] Failed to schedule delayed haptic: {e}")
+
+
 def _handle_input(ovr_context: OVRContext, input_state: dict[str, dict[str, float]]):
     root_obj = _get_or_create_root_object()
 
@@ -932,7 +948,8 @@ def end_recording_session(ovr_context: OVRContext, emit_haptic: bool = True):
     ovr_context.recording = False
     stop_recording(ovr_context)
     if emit_haptic:
-        _trigger_haptic_feedback(pulses=2)
+        _trigger_haptic_feedback()
+        _trigger_haptic_feedback_later(delay=0.25)
 
 
 def _maybe_toggle_recording_from_click(ovr_context: OVRContext, input_state: dict[str, dict[str, float]]):
