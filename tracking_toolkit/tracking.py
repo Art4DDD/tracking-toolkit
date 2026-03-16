@@ -27,6 +27,7 @@ recording_active = False
 action_sets = []
 action_handles = {}
 input_source_handles = {"left": 0, "right": 0}
+TRACKING_COLLECTION_NAME = "OVR Tracking"
 FINGER_CHANNELS = ("thumb_curl", "index_curl", "middle_curl", "ring_curl", "pinky_curl")
 ACTION_CHANNELS = ("click", "squeeze")
 latest_input_state = {
@@ -37,6 +38,8 @@ CLICK_ACTION_THRESHOLD = 0.5
 CLICK_RELEASE_DEBOUNCE_SEC = 0.12
 click_combo_latched = False
 click_release_started_at = None
+DRIVER_REFRESH_FPS = 60.0
+next_driver_refresh_at = 0.0
 
 FINGER_BONE_CHAINS = {
     "thumb": (2, 3, 4, 5),
@@ -106,15 +109,36 @@ def _safe_getattr_bool(obj, name: str, default=False):
 
 
 def _get_or_create_root_object() -> bpy.types.Object:
+    tracking_collection = get_or_create_tracking_collection()
     root_obj = bpy.data.objects.get("OVR Root")
     if root_obj:
+        if tracking_collection and root_obj.name not in tracking_collection.objects:
+            tracking_collection.objects.link(root_obj)
         return root_obj
 
     root_obj = bpy.data.objects.new("OVR Root", None)
     root_obj.empty_display_type = "CUBE"
     root_obj.empty_display_size = 0.1
-    bpy.context.scene.collection.objects.link(root_obj)
+    if tracking_collection:
+        tracking_collection.objects.link(root_obj)
+    else:
+        bpy.context.scene.collection.objects.link(root_obj)
     return root_obj
+
+
+def get_or_create_tracking_collection(scene: bpy.types.Scene | None = None) -> bpy.types.Collection | None:
+    target_scene = scene or getattr(bpy.context, "scene", None)
+    if not target_scene:
+        return None
+
+    collection = bpy.data.collections.get(TRACKING_COLLECTION_NAME)
+    if not collection:
+        collection = bpy.data.collections.new(TRACKING_COLLECTION_NAME)
+
+    if collection.name not in target_scene.collection.children:
+        target_scene.collection.children.link(collection)
+
+    return collection
 
 def init_handles():
     vr_ipt = openvr.VRInput()
@@ -268,23 +292,8 @@ def _trigger_haptic_feedback(
                 print(f"[OpenVR] Haptic send failed for {side} (source={source})")
 
 
-def _trigger_haptic_feedback_later(
-        delay: float,
-        duration: float = 0.15,
-        frequency: float = 120.0,
-        amplitude: float = 1.0,
-):
-    def _timer_callback():
-        _trigger_haptic_feedback(duration=duration, frequency=frequency, amplitude=amplitude)
-        return None
-
-    try:
-        bpy.app.timers.register(_timer_callback, first_interval=max(0.0, float(delay)))
-    except Exception as e:
-        print(f"[OpenVR] Failed to schedule delayed haptic: {e}")
-
-
 def _handle_input(ovr_context: OVRContext, input_state: dict[str, dict[str, float]]):
+    global next_driver_refresh_at
     root_obj = _get_or_create_root_object()
 
     left_state = input_state.get("left", {})
@@ -325,10 +334,35 @@ def _handle_input(ovr_context: OVRContext, input_state: dict[str, dict[str, floa
         "right_squeeze": float(right_state.get("squeeze", 0.0)),
     }
 
+    values_changed = False
     for channel, value in channel_map.items():
-        if channel not in root_obj:
-            root_obj[channel] = 0.0
-        root_obj[channel] = value
+        current_value = root_obj.get(channel, None)
+        if current_value is None:
+            root_obj[channel] = float(value)
+            values_changed = True
+            continue
+
+        try:
+            current_float = float(current_value)
+        except Exception:
+            current_float = 0.0
+
+        new_float = float(value)
+        if abs(current_float - new_float) > 1e-6:
+            root_obj[channel] = new_float
+            values_changed = True
+
+    # Match OSC Recorder behavior: nudge an RNA property so driver depsgraph
+    # notices custom property updates from timer-based live input.
+    if values_changed:
+        now = time.perf_counter()
+        refresh_interval = 1.0 / DRIVER_REFRESH_FPS if DRIVER_REFRESH_FPS > 0 else 0.0
+        if now >= next_driver_refresh_at:
+            next_driver_refresh_at = now + refresh_interval
+            try:
+                root_obj.location = root_obj.location
+            except Exception:
+                pass
 
 
 def _get_input(ovr_context: OVRContext) -> dict[str, dict[str, float]] | None:
@@ -683,7 +717,18 @@ def _apply_poses():
         if not tracker_obj:
             continue
 
-        tracker_obj.matrix_world = root_world @ pose
+        target_world = root_world @ pose
+        if tracker_obj.parent:
+            parent_world = tracker_obj.parent.matrix_world
+            target_local = parent_world.inverted() @ target_world
+        else:
+            target_local = target_world
+
+        loc, rot, _ = target_local.decompose()
+        if tracker_obj.rotation_mode != "QUATERNION":
+            tracker_obj.rotation_mode = "QUATERNION"
+        tracker_obj.location = loc
+        tracker_obj.rotation_quaternion = rot
 
 
 def _pose_vis_timer():
@@ -949,7 +994,6 @@ def end_recording_session(ovr_context: OVRContext, emit_haptic: bool = True):
     stop_recording(ovr_context)
     if emit_haptic:
         _trigger_haptic_feedback()
-        _trigger_haptic_feedback_later(delay=0.25)
 
 
 def _maybe_toggle_recording_from_click(ovr_context: OVRContext, input_state: dict[str, dict[str, float]]):

@@ -58,7 +58,7 @@ class RecorderPanel(View3DPanel, bpy.types.Panel):
         layout.operator(CreateRefsOperator.bl_idname, text="Create References")
 
         root_obj = bpy.data.objects.get("OVR Root")
-        has_references = ovr_context.references_created and bool(root_obj)
+        has_references = bool(root_obj) and (ovr_context.references_created or ovr_context.references_ever_created)
 
         if ovr_context.enabled and has_references:
             layout.label(text="Recording")
