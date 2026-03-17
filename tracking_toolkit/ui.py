@@ -58,7 +58,7 @@ class RecorderPanel(View3DPanel, bpy.types.Panel):
         layout.operator(CreateRefsOperator.bl_idname, text="Create References")
 
         root_obj = bpy.data.objects.get("OVR Root")
-        has_references = ovr_context.references_created and bool(root_obj)
+        has_references = bool(root_obj) and (ovr_context.references_created or ovr_context.references_ever_created)
 
         if ovr_context.enabled and has_references:
             layout.label(text="Recording")
@@ -82,12 +82,8 @@ class RecorderPanel(View3DPanel, bpy.types.Panel):
         if not show_tools:
             return
         if ovr_context.recordings_made:
-            convert_box = layout.box()
-            convert_col = convert_box.column(align=True)
-            convert_col.scale_y = 1.0
-            convert_col.operator(ConvertSubframesOperator.bl_idname, text="Convert", icon="KEYTYPE_KEYFRAME_VEC", emboss=False)
-            convert_col.operator(ConvertSubframesOperator.bl_idname, text="Subframes To Frames", emboss=False)
-Subframes To Frames", icon="KEYTYPE_KEYFRAME_VEC")
+            layout.label(text="Converting")
+            layout.operator(ConvertSubframesOperator.bl_idname, text="Subframes to Frames", icon="KEYTYPE_KEYFRAME_VEC")
 
         if not (ovr_context.references_ever_created and root_obj):
             return
@@ -107,6 +103,7 @@ Subframes To Frames", icon="KEYTYPE_KEYFRAME_VEC")
                 ("middle_curl", "Middle"),
                 ("ring_curl", "Ring"),
                 ("pinky_curl", "Pinky"),
+                ("squeeze", "Squeeze"),
             ):
                 channel = f"{prefix}_{suffix}"
                 if channel not in root_obj:

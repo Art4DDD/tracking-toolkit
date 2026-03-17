@@ -4,7 +4,16 @@ from mathutils import Matrix, Vector
 from pathlib import Path
 
 from .properties import Preferences, OVRContext, OVRTracker
-from .tracking import _get_poses, load_trackers, start_recording, stop_recording, start_preview, stop_preview, init_handles
+from .tracking import (
+    _get_poses,
+    load_trackers,
+    begin_recording_session,
+    end_recording_session,
+    start_preview,
+    stop_preview,
+    init_handles,
+    get_or_create_tracking_collection,
+)
 from .. import __package__ as base_package
 
 
@@ -79,13 +88,11 @@ class ToggleRecordOperator(bpy.types.Operator):
         if not ovr_context.enabled:
             return {"FINISHED"}
 
-        ovr_context.recording = not ovr_context.recording
         if ovr_context.recording:
-            ovr_context.record_start_frame = context.scene.frame_current
-            start_preview(ovr_context)
-            start_recording()
-        else:
-            stop_recording(ovr_context)
+            end_recording_session(ovr_context, emit_haptic=True)
+            return {"FINISHED"}
+
+        begin_recording_session(ovr_context, emit_haptic=True)
 
         return {"FINISHED"}
 
@@ -152,6 +159,14 @@ class CreateRefsOperator(bpy.types.Operator):
         else:
             prev_mode = "OBJECT"
 
+        tracking_collection = get_or_create_tracking_collection(context.scene)
+
+        def _link_to_tracking_collection(obj: bpy.types.Object | None):
+            if not obj or not tracking_collection:
+                return
+            if obj.name not in tracking_collection.objects:
+                tracking_collection.objects.link(obj)
+
         def _iter_hierarchy(roots: list[bpy.types.Object]):
             seen = set()
             stack = list(roots)
@@ -206,6 +221,7 @@ class CreateRefsOperator(bpy.types.Operator):
         def _ensure_tracker_box(tracker_name: str) -> bpy.types.Object:
             tracker_obj = bpy.data.objects.get(tracker_name)
             if tracker_obj and tracker_obj.type == "MESH" and tracker_obj.get("_ovr_tracker_box"):
+                _link_to_tracking_collection(tracker_obj)
                 return tracker_obj
 
             tracker_children = []
@@ -217,7 +233,10 @@ class CreateRefsOperator(bpy.types.Operator):
 
             tracker_mesh = bpy.data.meshes.new(f"{tracker_name} Mesh")
             tracker_obj = bpy.data.objects.new(tracker_name, tracker_mesh)
-            context.collection.objects.link(tracker_obj)
+            if tracking_collection:
+                tracking_collection.objects.link(tracker_obj)
+            else:
+                context.collection.objects.link(tracker_obj)
             tracker_obj.matrix_world = old_matrix_world
             tracker_obj.show_name = True
             tracker_obj.hide_render = True
@@ -254,10 +273,15 @@ class CreateRefsOperator(bpy.types.Operator):
 
         root_empty = bpy.data.objects.get("OVR Root")
         if not root_empty:
-            bpy.ops.object.empty_add(type="CUBE", location=(0, 0, 0))
-            root_empty = bpy.context.object
-            root_empty.name = "OVR Root"
+            root_empty = bpy.data.objects.new("OVR Root", None)
+            root_empty.empty_display_type = "CUBE"
+            if tracking_collection:
+                tracking_collection.objects.link(root_empty)
+            else:
+                context.scene.collection.objects.link(root_empty)
             root_empty.empty_display_size = 0.1
+        else:
+            _link_to_tracking_collection(root_empty)
 
         preferences: Preferences | None = context.preferences.addons[base_package].preferences
         install_dir = Path(preferences.steamvr_installation_path)
@@ -377,6 +401,9 @@ class CreateRefsOperator(bpy.types.Operator):
             if not imported_objects:
                 return None
 
+            for imported in imported_objects:
+                _link_to_tracking_collection(imported)
+
             imported_set = set(imported_objects)
             root_objects = [obj for obj in imported_objects if obj.parent not in imported_set]
             if not root_objects:
@@ -398,7 +425,10 @@ class CreateRefsOperator(bpy.types.Operator):
             for src in objects_to_copy:
                 dup = src.copy()
                 dup.parent = None
-                context.scene.collection.objects.link(dup)
+                if tracking_collection:
+                    tracking_collection.objects.link(dup)
+                else:
+                    context.scene.collection.objects.link(dup)
                 duplicated_by_source[src] = dup
 
             for src in objects_to_copy:
